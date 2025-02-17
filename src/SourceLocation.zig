@@ -10,6 +10,7 @@
 //                                                                            //
 // ************************************************************************** //
 
+const std = @import("std");
 const SourceLocation = @This();
 
 filename: []const u8 = "",
@@ -22,6 +23,18 @@ pub fn init(filename: []const u8, line: usize, column: usize) SourceLocation {
         .line = line,
         .column = column,
     };
+}
+
+pub fn format(
+    self: @This(),
+    comptime fmt: []const u8,
+    options: std.fmt.FormatOptions,
+    writer: anytype,
+) !void {
+    _ = fmt;
+    _ = options;
+
+    try writer.print("{s} line:{d}:col:{d}\n", .{ self.filename, self.line, self.column });
 }
 
 pub const LocationIndex = usize;

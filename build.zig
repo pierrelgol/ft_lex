@@ -31,7 +31,7 @@ pub fn build(b: *std.Build) void {
 
     const lib = b.addLibrary(.{
         .linkage = .static,
-        .name = "ft_lex",
+        .name = "l",
         .root_module = lib_mod,
     });
 
@@ -70,4 +70,19 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_unit_tests.step);
     test_step.dependOn(&run_exe_unit_tests.step);
+
+    const lib_check = b.addLibrary(.{
+        .linkage = .static,
+        .name = "l",
+        .root_module = lib_mod,
+    });
+
+    const exe_check = b.addExecutable(.{
+        .name = "ft_lex",
+        .root_module = exe_mod,
+    });
+
+    const check_step = b.step("check", "for zls");
+    check_step.dependOn(&exe_check.step);
+    check_step.dependOn(&lib_check.step);
 }
