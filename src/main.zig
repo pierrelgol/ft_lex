@@ -16,7 +16,7 @@ const mem = std.mem;
 const log = std.log;
 const Lexer = @import("Lexer.zig");
 const Token = @import("Token.zig");
-const inputs = @import("lexinputs").c99_identifiers;
+const inputs = @import("lexinputs").c99_identifiers_no_comments;
 
 pub fn main() !void {
     var base_allocator = heap.DebugAllocator(.{}){};
@@ -29,5 +29,4 @@ pub fn main() !void {
     defer lexer.deinit();
 
     try lexer.lex("foo", inputs[0..]);
-    std.Thread.sleep(1000 * 1000 * 1000);
 }

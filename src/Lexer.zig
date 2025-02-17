@@ -57,8 +57,10 @@ pub fn lex(self: *Lexer, source_file: []const u8, source_code: []const u8) !void
 
         var tokenizer = mem.splitAny(u8, line, " \t");
         while (tokenizer.next()) |token| {
-            std.debug.print("{}'{s}'\n", .{ location, token });
-            location.moveCol(token.len);
+            if (token.len != 0) {
+                std.debug.print("{}'{s}'\n", .{ location, token });
+            }
+            location.moveCol(if (token.len == 0) 1 else token.len);
         }
         std.debug.print("\n", .{});
     }
