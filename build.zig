@@ -21,6 +21,11 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    exe_mod.addAnonymousImport("lexinputs", .{
+        .root_source_file = b.path("test/inputs.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
 
     exe_mod.addImport("ft_lex_lib", lib_mod);
 
