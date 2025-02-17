@@ -25,6 +25,15 @@ pub fn init(filename: []const u8, line: usize, column: usize) SourceLocation {
     };
 }
 
+pub fn nextLine(self: *SourceLocation) void {
+    self.line += 1;
+    self.column = 0;
+}
+
+pub fn moveCol(self: *SourceLocation, amount: usize) void {
+    self.column += amount;
+}
+
 pub fn format(
     self: @This(),
     comptime fmt: []const u8,

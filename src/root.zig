@@ -1,6 +1,13 @@
-const std = @import("std");
-const Parser = @import("Parser.zig");
+// ************************************************************************** //
+//                                                                            //
+//                                                        :::      ::::::::   //
+//   root.zig                                           :+:      :+:    :+:   //
+//                                                    +:+ +:+         +:+     //
+//   By: pollivie <pollivie.student.42.fr>          +#+  +:+       +#+        //
+//                                                +#+#+#+#+#+   +#+           //
+//   Created: 2025/02/17 17:55:38 by pollivie          #+#    #+#             //
+//   Updated: 2025/02/17 17:55:38 by pollivie         ###   ########.fr       //
+//                                                                            //
+// ************************************************************************** //
 
-comptime {
-    std.testing.refAllDeclsRecursive(Parser);
-}
+const std = @import("std");
