@@ -3,6 +3,7 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const no_bin = b.option(bool, "no-bin", "skip emitting binary") orelse false;
 
     const lib_mod = b.createModule(.{
         .root_source_file = b.path("src/root.zig"),
@@ -33,16 +34,24 @@ pub fn build(b: *std.Build) void {
         .linkage = .static,
         .name = "l",
         .root_module = lib_mod,
+        .use_llvm = if (optimize == .Debug) true else false,
     });
-
-    b.installArtifact(lib);
+    if (no_bin) {
+        b.getInstallStep().dependOn(&lib.step);
+    } else {
+        b.installArtifact(lib);
+    }
 
     const exe = b.addExecutable(.{
         .name = "ft_lex",
         .root_module = exe_mod,
+        .use_llvm = if (optimize == .Debug) true else false,
     });
-
-    b.installArtifact(exe);
+    if (no_bin) {
+        b.getInstallStep().dependOn(&exe.step);
+    } else {
+        b.installArtifact(exe);
+    }
 
     const run_cmd = b.addRunArtifact(exe);
 
@@ -75,11 +84,13 @@ pub fn build(b: *std.Build) void {
         .linkage = .static,
         .name = "l",
         .root_module = lib_mod,
+        .use_llvm = if (optimize == .Debug) true else false,
     });
 
     const exe_check = b.addExecutable(.{
         .name = "ft_lex",
         .root_module = exe_mod,
+        .use_llvm = if (optimize == .Debug) true else false,
     });
 
     const check_step = b.step("check", "for zls");

@@ -1,8 +1,8 @@
 .{
-    .name = "ft_lex",
+    .name = .ft_lex,
     .version = "0.0.0",
-    .dependencies = .{
-    },
+    .fingerprint = 0xf7ca40b79a230468,
+    .dependencies = .{},
     .paths = .{
         "build.zig",
         "build.zig.zon",

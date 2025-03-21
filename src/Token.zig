@@ -24,3 +24,14 @@ pub fn init(location: SourceLocation, text: ?[]const u8) Token {
         .text = text orelse "",
     };
 }
+
+pub fn format(
+    self: @This(),
+    comptime fmt: []const u8,
+    options: std.fmt.FormatOptions,
+    writer: anytype,
+) !void {
+    _ = fmt;
+    _ = options;
+    try writer.print("{}[{s}]", .{ self.location, self.text });
+}
