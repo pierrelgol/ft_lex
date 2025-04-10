@@ -3,19 +3,11 @@ const ascii = std.ascii;
 
 const Iterator = @import("Iterator.zig").Iterator;
 const tok = @import("token.zig");
-const Kind = tok.Kind;
+const TokenKind = tok.Kind;
 const Token = tok.Token;
 
 pub const Lexer = struct {
     tokens: [MAX_TOKENS]Token = undefined,
-
-    pub const empty: Lexer = .{
-        .tokens = undefined,
-    };
-
-    pub const MAX_TOKENS: usize = 256;
-
-    pub const LexError = error{ SyntaxError, UnexpectedEof };
 
     pub fn lex(self: *Lexer, inputs: []const u8) LexError![]const Token {
         var it: Iterator(u8) = .init(inputs);
@@ -49,6 +41,14 @@ pub const Lexer = struct {
         self.tokens[len] = Token.init(.eof, {});
         return self.tokens[0 .. len + 1];
     }
+
+    pub const empty: Lexer = .{
+        .tokens = undefined,
+    };
+
+    pub const MAX_TOKENS: usize = 256;
+
+    pub const LexError = error{ SyntaxError, UnexpectedEof };
 };
 
 test "simple 01" {
