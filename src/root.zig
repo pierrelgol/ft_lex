@@ -1,16 +1,12 @@
 const std = @import("std");
-pub const Lexer = @import("Lexer.zig").Lexer;
-pub const TokenKind = @import("token.zig").Kind;
-pub const Token = @import("token.zig").Token;
-pub const Parser = @import("Parser.zig").Parser;
-pub const Atom = @import("atom.zig").Atom;
-pub const AtomKind = @import("atom.zig").Kind;
+const common = @import("common.zig");
+pub const Iterator = common.Iterator;
+pub const Lexer = @import("Lexer.zig");
+pub const LexError = Lexer.Error;
+pub const LexContext = Lexer.Context;
+pub const LexToken = Lexer.Token;
+pub const LexTokenKind = Lexer.Token.Kind;
 
 comptime {
     std.testing.refAllDeclsRecursive(Lexer);
-    std.testing.refAllDeclsRecursive(Token);
-    std.testing.refAllDeclsRecursive(TokenKind);
-    std.testing.refAllDeclsRecursive(Atom);
-    std.testing.refAllDeclsRecursive(AtomKind);
-    std.testing.refAllDeclsRecursive(Parser);
 }
