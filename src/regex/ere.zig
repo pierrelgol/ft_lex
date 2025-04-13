@@ -6,11 +6,12 @@ const assert = debug.assert;
 const ascii = std.ascii;
 const testing = std.testing;
 
-const Lexer = @import("../Lexer.zig");
-const Token = @import("../Token.zig").Token;
-const TokenResult = @import("../Token.zig").TokenResult;
+const Lexer = @import("Lexer.zig");
+const Token = @import("Token.zig").Token;
+const TokenResult = @import("Token.zig").TokenResult;
 
-const Lex = @This();
+const Ere = @This();
+
 pub const Tokenizer = struct {
     inputs: []const u8,
     index: usize,
@@ -63,17 +64,17 @@ pub const Tokenizer = struct {
         return res.token;
     }
 
-    fn advanceInternal(self: *Tokenizer, count: usize) void {
+    pub fn advanceInternal(self: *Tokenizer, count: usize) void {
         self.index += count;
     }
 
-    fn nextInternal(self: *Tokenizer) Token {
+    pub fn nextInternal(self: *Tokenizer) Token {
         const res = self.peekInternal();
         self.advanceInternal(res.bytes);
         return res.token;
     }
 
-    fn peekInternal(self: *Tokenizer) TokenResult {
+    pub fn peekInternal(self: *Tokenizer) TokenResult {
         const token_res = self.tokenize();
 
         switch (token_res.token) {
@@ -126,6 +127,14 @@ pub const Tokenizer = struct {
                     return .{ .token = .{ .literal = '\\' }, .bytes = 1 };
                 }
                 const next_c = self.inputs[self.index + 1];
+
+                if (ascii.isDigit(next_c)) {
+                    const digit = next_c - '0';
+                    if (digit >= 1 and digit <= 9) {
+                        return .{ .token = .{ .backreference = @intCast(digit) }, .bytes = 2 };
+                    }
+                }
+
                 switch (next_c) {
                     '^', '$', '.', '[', '(', ')', '|', '*', '+', '?', '{', '\\' => {
                         return .{ .token = .{ .literal = next_c }, .bytes = 2 };
@@ -135,6 +144,7 @@ pub const Tokenizer = struct {
                     },
                 }
             },
+
             '^' => return .{ .token = .start_anchor, .bytes = 1 },
             '$' => return .{ .token = .end_anchor, .bytes = 1 },
             '.' => return .{ .token = .any_character, .bytes = 1 },
@@ -146,6 +156,7 @@ pub const Tokenizer = struct {
             ')' => return .{ .token = .close_group, .bytes = 1 },
             '[' => return .{ .token = .open_bracket, .bytes = 1 },
             '{' => return .{ .token = .open_interval_brace, .bytes = 1 },
+
             else => return .{ .token = .{ .literal = c }, .bytes = 1 },
         }
     }
@@ -433,6 +444,12 @@ test "lexer backslash escape literal" {
 test "lexer backslash escape backslash" {
     const input: []const u8 = "\\\\";
     const expected = [_]Token.Kind{.literal};
+    try expectTokens(input, &expected);
+}
+
+test "lexer backreference" {
+    const input: []const u8 = "(a)\\1";
+    const expected = [_]Token.Kind{ .open_group, .literal, .close_group, .backreference };
     try expectTokens(input, &expected);
 }
 
