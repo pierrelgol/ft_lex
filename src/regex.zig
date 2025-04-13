@@ -3,9 +3,9 @@ const std = @import("std");
 pub const Lexer = @import("regex/Lexer.zig");
 pub const Token = @import("regex/Token.zig").Token;
 pub const TokenResult = @import("regex/Token.zig").TokenResult;
-pub const RegexEre = @import("regex/ere.zig").Tokenizer;
-pub const RegexBre = @import("regex/bre.zig").Tokenizer;
-pub const RegexLex = @import("regex/lex.zig").Tokenizer;
+pub const RegexEre = @import("regex/ere.zig");
+pub const RegexBre = @import("regex/bre.zig");
+pub const RegexLex = @import("regex/lex.zig");
 
 test "Lexer" {
     const input: []const u8 = "ab|cd";

@@ -9,349 +9,346 @@ const testing = std.testing;
 const Lexer = @import("Lexer.zig");
 const Token = @import("Token.zig").Token;
 const TokenResult = @import("Token.zig").TokenResult;
+const EreTokenizer = @This();
 
-const Ere = @This();
+inputs: []const u8,
+index: usize,
+mode: Mode,
+is_first_in_bracket: bool,
 
-pub const Tokenizer = struct {
-    inputs: []const u8,
-    index: usize,
-    mode: Mode,
-    is_first_in_bracket: bool,
-
-    pub const Mode = enum {
-        in_regex_expr,
-        in_posix_expr,
-        in_colla_expr,
-        in_equiv_expr,
-        in_class_expr,
-        in_intrv_expr,
-    };
-
-    pub fn init(inputs: []const u8) Tokenizer {
-        return .{
-            .inputs = inputs,
-            .index = 0,
-            .mode = .in_regex_expr,
-            .is_first_in_bracket = false,
-        };
-    }
-
-    pub fn lexer(self: *Tokenizer) Lexer {
-        return .{
-            .ptr = self,
-            .vtable = &.{
-                .nextFn = next,
-                .peekFn = peek,
-            },
-        };
-    }
-
-    fn advance(ctx: *anyopaque, count: usize) void {
-        var self: *Tokenizer = @ptrCast(@alignCast(ctx));
-        self.index += count;
-    }
-
-    fn next(ctx: *anyopaque) Token {
-        var self: *Tokenizer = @ptrCast(@alignCast(ctx));
-        const res = self.peekInternal();
-        self.advanceInternal(res.bytes);
-        return res.token;
-    }
-
-    fn peek(ctx: *anyopaque) Token {
-        var self: *Tokenizer = @ptrCast(@alignCast(ctx));
-        const res = self.peekInternal();
-        return res.token;
-    }
-
-    pub fn advanceInternal(self: *Tokenizer, count: usize) void {
-        self.index += count;
-    }
-
-    pub fn nextInternal(self: *Tokenizer) Token {
-        const res = self.peekInternal();
-        self.advanceInternal(res.bytes);
-        return res.token;
-    }
-
-    pub fn peekInternal(self: *Tokenizer) TokenResult {
-        const token_res = self.tokenize();
-
-        switch (token_res.token) {
-            .open_bracket => self.mode = .in_posix_expr,
-            .open_interval_brace => self.mode = .in_intrv_expr,
-            .close_bracket => self.mode = .in_regex_expr,
-            .close_interval_brace => self.mode = .in_regex_expr,
-            .character_class_start => self.mode = .in_class_expr,
-            .character_class_end => self.mode = .in_posix_expr,
-            .collating_element_start => self.mode = .in_colla_expr,
-            .collating_element_end => self.mode = .in_posix_expr,
-            .equivalence_class_start => self.mode = .in_equiv_expr,
-            .equivalence_class_end => self.mode = .in_posix_expr,
-            else => {
-                if (self.mode == .in_posix_expr and self.is_first_in_bracket) {
-                    self.is_first_in_bracket = false;
-                }
-            },
-        }
-
-        if (token_res.token == .open_bracket) {
-            self.is_first_in_bracket = true;
-        }
-
-        return token_res;
-    }
-
-    fn tokenize(self: *const Tokenizer) TokenResult {
-        if (self.index >= self.inputs.len) {
-            return TokenResult.EOF;
-        }
-
-        return switch (self.mode) {
-            .in_regex_expr => self.tokenizeRegexExpr(),
-            .in_posix_expr => self.tokenizePosixExpr(),
-            .in_colla_expr => self.tokenizeCollaExpr(),
-            .in_equiv_expr => self.tokenizeEquivExpr(),
-            .in_class_expr => self.tokenizeClassExpr(),
-            .in_intrv_expr => self.tokenizeIntrvExpr(),
-        };
-    }
-
-    fn tokenizeRegexExpr(self: *const Tokenizer) TokenResult {
-        assert(self.mode == .in_regex_expr);
-        const c = self.inputs[self.index];
-
-        switch (c) {
-            '\\' => {
-                if (self.index + 1 >= self.inputs.len) {
-                    return .{ .token = .{ .literal = '\\' }, .bytes = 1 };
-                }
-                const next_c = self.inputs[self.index + 1];
-
-                if (ascii.isDigit(next_c)) {
-                    const digit = next_c - '0';
-                    if (digit >= 1 and digit <= 9) {
-                        return .{ .token = .{ .backreference = @intCast(digit) }, .bytes = 2 };
-                    }
-                }
-
-                switch (next_c) {
-                    '^', '$', '.', '[', '(', ')', '|', '*', '+', '?', '{', '\\' => {
-                        return .{ .token = .{ .literal = next_c }, .bytes = 2 };
-                    },
-                    else => {
-                        return .{ .token = .{ .literal = next_c }, .bytes = 2 };
-                    },
-                }
-            },
-
-            '^' => return .{ .token = .start_anchor, .bytes = 1 },
-            '$' => return .{ .token = .end_anchor, .bytes = 1 },
-            '.' => return .{ .token = .any_character, .bytes = 1 },
-            '|' => return .{ .token = .alternation, .bytes = 1 },
-            '*' => return .{ .token = .zero_or_more, .bytes = 1 },
-            '+' => return .{ .token = .one_or_more, .bytes = 1 },
-            '?' => return .{ .token = .zero_or_one, .bytes = 1 },
-            '(' => return .{ .token = .open_group, .bytes = 1 },
-            ')' => return .{ .token = .close_group, .bytes = 1 },
-            '[' => return .{ .token = .open_bracket, .bytes = 1 },
-            '{' => return .{ .token = .open_interval_brace, .bytes = 1 },
-
-            else => return .{ .token = .{ .literal = c }, .bytes = 1 },
-        }
-    }
-
-    fn tokenizeClassExpr(self: *const Tokenizer) TokenResult {
-        assert(self.mode == .in_class_expr);
-
-        if (self.index + 1 < self.inputs.len and
-            self.inputs[self.index] == ':' and
-            self.inputs[self.index + 1] == ']')
-        {
-            return .{ .token = .character_class_end, .bytes = 2 };
-        }
-
-        var end = self.index;
-        while (end + 1 < self.inputs.len) {
-            if (self.inputs[end] == ':' and self.inputs[end + 1] == ']') {
-                break;
-            }
-
-            end += 1;
-        }
-
-        if (end + 1 >= self.inputs.len or self.inputs[end] != ':' or self.inputs[end + 1] != ']') {
-            std.debug.print("Error: Unterminated character class name at index {d}\n", .{self.index});
-            return TokenResult.EOF;
-        }
-
-        if (end > self.index) {
-            const name_slice = self.inputs[self.index..end];
-
-            return .{ .token = .{ .character_class_name = name_slice }, .bytes = end - self.index };
-        } else {
-            std.debug.print("Error: Empty character class name at index {d}\n", .{self.index});
-            return TokenResult.EOF;
-        }
-    }
-
-    fn tokenizeCollaExpr(self: *const Tokenizer) TokenResult {
-        assert(self.mode == .in_colla_expr);
-
-        if (self.index + 1 < self.inputs.len and
-            self.inputs[self.index] == '.' and
-            self.inputs[self.index + 1] == ']')
-        {
-            return .{ .token = .collating_element_end, .bytes = 2 };
-        }
-
-        var end = self.index;
-        while (end + 1 < self.inputs.len) {
-            if (self.inputs[end] == '.' and self.inputs[end + 1] == ']') {
-                break;
-            }
-
-            end += 1;
-        }
-
-        if (end + 1 >= self.inputs.len or self.inputs[end] != '.' or self.inputs[end + 1] != ']') {
-            std.debug.print("Error: Unterminated collating element name at index {d}\n", .{self.index});
-            return TokenResult.EOF;
-        }
-
-        if (end > self.index) {
-            const name_slice = self.inputs[self.index..end];
-
-            return .{ .token = .{ .collating_element_name = name_slice }, .bytes = end - self.index };
-        } else {
-            std.debug.print("Error: Empty collating element name at index {d}\n", .{self.index});
-            return TokenResult.EOF;
-        }
-    }
-
-    fn tokenizeEquivExpr(self: *const Tokenizer) TokenResult {
-        assert(self.mode == .in_equiv_expr);
-
-        if (self.index + 1 < self.inputs.len and
-            self.inputs[self.index] == '=' and
-            self.inputs[self.index + 1] == ']')
-        {
-            return .{ .token = .equivalence_class_end, .bytes = 2 };
-        }
-
-        var end = self.index;
-        while (end + 1 < self.inputs.len) {
-            if (self.inputs[end] == '=' and self.inputs[end + 1] == ']') {
-                break;
-            }
-
-            end += 1;
-        }
-
-        if (end + 1 >= self.inputs.len or self.inputs[end] != '=' or self.inputs[end + 1] != ']') {
-            std.debug.print("Error: Unterminated equivalence class name at index {d}\n", .{self.index});
-            return TokenResult.EOF;
-        }
-
-        if (end > self.index) {
-            const name_slice = self.inputs[self.index..end];
-
-            return .{ .token = .{ .equivalence_class_name = name_slice }, .bytes = end - self.index };
-        } else {
-            std.debug.print("Error: Empty equivalence class name at index {d}\n", .{self.index});
-            return TokenResult.EOF;
-        }
-    }
-    fn tokenizePosixExpr(self: *const Tokenizer) TokenResult {
-        assert(self.mode == .in_posix_expr);
-        const c = self.inputs[self.index];
-
-        switch (c) {
-            ']' => {
-                if (self.is_first_in_bracket) {
-                    return .{ .token = .{ .literal = c }, .bytes = 1 };
-                } else {
-                    return .{ .token = .close_bracket, .bytes = 1 };
-                }
-            },
-            '[' => {
-                if (self.index + 1 >= self.inputs.len) {
-                    return .{ .token = .{ .literal = c }, .bytes = 1 };
-                }
-                const next_c = self.inputs[self.index + 1];
-                switch (next_c) {
-                    '.' => return .{ .token = .collating_element_start, .bytes = 2 },
-                    '=' => return .{ .token = .equivalence_class_start, .bytes = 2 },
-                    ':' => return .{ .token = .character_class_start, .bytes = 2 },
-                    else => return .{ .token = .{ .literal = c }, .bytes = 1 },
-                }
-            },
-            '^' => {
-                if (self.is_first_in_bracket) {
-                    return .{ .token = .bracket_negation, .bytes = 1 };
-                } else {
-                    return .{ .token = .{ .literal = c }, .bytes = 1 };
-                }
-            },
-            '-' => {
-                if (!self.is_first_in_bracket and self.index + 1 < self.inputs.len and self.inputs[self.index + 1] != ']') {
-                    return .{ .token = .bracket_range_operator, .bytes = 1 };
-                } else {
-                    return .{ .token = .{ .literal = c }, .bytes = 1 };
-                }
-            },
-
-            '\\' => {
-                if (self.index + 1 < self.inputs.len) {
-                    return .{ .token = .{ .literal = self.inputs[self.index + 1] }, .bytes = 2 };
-                } else {
-                    return .{ .token = .{ .literal = c }, .bytes = 1 };
-                }
-            },
-            else => return .{ .token = .{ .literal = c }, .bytes = 1 },
-        }
-    }
-
-    fn tokenizeIntrvExpr(self: *const Tokenizer) TokenResult {
-        assert(self.mode == .in_intrv_expr);
-        const c = self.inputs[self.index];
-
-        switch (c) {
-            '}' => return .{ .token = .close_interval_brace, .bytes = 1 },
-            ',' => return .{ .token = .interval_comma, .bytes = 1 },
-            else => {
-                if (ascii.isDigit(c)) {
-                    var end = self.index + 1;
-                    while (end < self.inputs.len and ascii.isDigit(self.inputs[end])) : (end += 1) {}
-                    const num_slice = self.inputs[self.index..end];
-                    const num = std.fmt.parseUnsigned(u32, num_slice, 10) catch {
-                        return .{ .token = .{ .literal = '{' }, .bytes = 1 };
-                    };
-                    return .{ .token = .{ .interval_number = num }, .bytes = end - self.index };
-                } else {
-                    return .{ .token = .{ .literal = '{' }, .bytes = 1 };
-                }
-            },
-        }
-    }
+pub const Mode = enum {
+    in_regex_expr,
+    in_posix_expr,
+    in_colla_expr,
+    in_equiv_expr,
+    in_class_expr,
+    in_intrv_expr,
 };
 
+pub fn init(inputs: []const u8) EreTokenizer {
+    return .{
+        .inputs = inputs,
+        .index = 0,
+        .mode = .in_regex_expr,
+        .is_first_in_bracket = false,
+    };
+}
+
+pub fn lexer(self: *EreTokenizer) Lexer {
+    return .{
+        .ptr = self,
+        .vtable = &.{
+            .nextFn = next,
+            .peekFn = peek,
+        },
+    };
+}
+
+fn advance(ctx: *anyopaque, count: usize) void {
+    var self: *EreTokenizer = @ptrCast(@alignCast(ctx));
+    self.index += count;
+}
+
+fn next(ctx: *anyopaque) Token {
+    var self: *EreTokenizer = @ptrCast(@alignCast(ctx));
+    const res = self.peekInternal();
+    self.advanceInternal(res.bytes);
+    return res.token;
+}
+
+fn peek(ctx: *anyopaque) Token {
+    var self: *EreTokenizer = @ptrCast(@alignCast(ctx));
+    const res = self.peekInternal();
+    return res.token;
+}
+
+pub fn advanceInternal(self: *EreTokenizer, count: usize) void {
+    self.index += count;
+}
+
+pub fn nextInternal(self: *EreTokenizer) Token {
+    const res = self.peekInternal();
+    self.advanceInternal(res.bytes);
+    return res.token;
+}
+
+pub fn peekInternal(self: *EreTokenizer) TokenResult {
+    const token_res = self.tokenize();
+
+    switch (token_res.token) {
+        .open_bracket => self.mode = .in_posix_expr,
+        .open_interval_brace => self.mode = .in_intrv_expr,
+        .close_bracket => self.mode = .in_regex_expr,
+        .close_interval_brace => self.mode = .in_regex_expr,
+        .character_class_start => self.mode = .in_class_expr,
+        .character_class_end => self.mode = .in_posix_expr,
+        .collating_element_start => self.mode = .in_colla_expr,
+        .collating_element_end => self.mode = .in_posix_expr,
+        .equivalence_class_start => self.mode = .in_equiv_expr,
+        .equivalence_class_end => self.mode = .in_posix_expr,
+        else => {
+            if (self.mode == .in_posix_expr and self.is_first_in_bracket) {
+                self.is_first_in_bracket = false;
+            }
+        },
+    }
+
+    if (token_res.token == .open_bracket) {
+        self.is_first_in_bracket = true;
+    }
+
+    return token_res;
+}
+
+fn tokenize(self: *const EreTokenizer) TokenResult {
+    if (self.index >= self.inputs.len) {
+        return TokenResult.EOF;
+    }
+
+    return switch (self.mode) {
+        .in_regex_expr => self.tokenizeRegexExpr(),
+        .in_posix_expr => self.tokenizePosixExpr(),
+        .in_colla_expr => self.tokenizeCollaExpr(),
+        .in_equiv_expr => self.tokenizeEquivExpr(),
+        .in_class_expr => self.tokenizeClassExpr(),
+        .in_intrv_expr => self.tokenizeIntrvExpr(),
+    };
+}
+
+fn tokenizeRegexExpr(self: *const EreTokenizer) TokenResult {
+    assert(self.mode == .in_regex_expr);
+    const c = self.inputs[self.index];
+
+    switch (c) {
+        '\\' => {
+            if (self.index + 1 >= self.inputs.len) {
+                return .{ .token = .{ .literal = '\\' }, .bytes = 1 };
+            }
+            const next_c = self.inputs[self.index + 1];
+
+            if (ascii.isDigit(next_c)) {
+                const digit = next_c - '0';
+                if (digit >= 1 and digit <= 9) {
+                    return .{ .token = .{ .backreference = @intCast(digit) }, .bytes = 2 };
+                }
+            }
+
+            switch (next_c) {
+                '^', '$', '.', '[', '(', ')', '|', '*', '+', '?', '{', '\\' => {
+                    return .{ .token = .{ .literal = next_c }, .bytes = 2 };
+                },
+                else => {
+                    return .{ .token = .{ .literal = next_c }, .bytes = 2 };
+                },
+            }
+        },
+
+        '^' => return .{ .token = .start_anchor, .bytes = 1 },
+        '$' => return .{ .token = .end_anchor, .bytes = 1 },
+        '.' => return .{ .token = .any_character, .bytes = 1 },
+        '|' => return .{ .token = .alternation, .bytes = 1 },
+        '*' => return .{ .token = .zero_or_more, .bytes = 1 },
+        '+' => return .{ .token = .one_or_more, .bytes = 1 },
+        '?' => return .{ .token = .zero_or_one, .bytes = 1 },
+        '(' => return .{ .token = .open_group, .bytes = 1 },
+        ')' => return .{ .token = .close_group, .bytes = 1 },
+        '[' => return .{ .token = .open_bracket, .bytes = 1 },
+        '{' => return .{ .token = .open_interval_brace, .bytes = 1 },
+
+        else => return .{ .token = .{ .literal = c }, .bytes = 1 },
+    }
+}
+
+fn tokenizeClassExpr(self: *const EreTokenizer) TokenResult {
+    assert(self.mode == .in_class_expr);
+
+    if (self.index + 1 < self.inputs.len and
+        self.inputs[self.index] == ':' and
+        self.inputs[self.index + 1] == ']')
+    {
+        return .{ .token = .character_class_end, .bytes = 2 };
+    }
+
+    var end = self.index;
+    while (end + 1 < self.inputs.len) {
+        if (self.inputs[end] == ':' and self.inputs[end + 1] == ']') {
+            break;
+        }
+
+        end += 1;
+    }
+
+    if (end + 1 >= self.inputs.len or self.inputs[end] != ':' or self.inputs[end + 1] != ']') {
+        std.debug.print("Error: Unterminated character class name at index {d}\n", .{self.index});
+        return TokenResult.EOF;
+    }
+
+    if (end > self.index) {
+        const name_slice = self.inputs[self.index..end];
+
+        return .{ .token = .{ .character_class_name = name_slice }, .bytes = end - self.index };
+    } else {
+        std.debug.print("Error: Empty character class name at index {d}\n", .{self.index});
+        return TokenResult.EOF;
+    }
+}
+
+fn tokenizeCollaExpr(self: *const EreTokenizer) TokenResult {
+    assert(self.mode == .in_colla_expr);
+
+    if (self.index + 1 < self.inputs.len and
+        self.inputs[self.index] == '.' and
+        self.inputs[self.index + 1] == ']')
+    {
+        return .{ .token = .collating_element_end, .bytes = 2 };
+    }
+
+    var end = self.index;
+    while (end + 1 < self.inputs.len) {
+        if (self.inputs[end] == '.' and self.inputs[end + 1] == ']') {
+            break;
+        }
+
+        end += 1;
+    }
+
+    if (end + 1 >= self.inputs.len or self.inputs[end] != '.' or self.inputs[end + 1] != ']') {
+        std.debug.print("Error: Unterminated collating element name at index {d}\n", .{self.index});
+        return TokenResult.EOF;
+    }
+
+    if (end > self.index) {
+        const name_slice = self.inputs[self.index..end];
+
+        return .{ .token = .{ .collating_element_name = name_slice }, .bytes = end - self.index };
+    } else {
+        std.debug.print("Error: Empty collating element name at index {d}\n", .{self.index});
+        return TokenResult.EOF;
+    }
+}
+
+fn tokenizeEquivExpr(self: *const EreTokenizer) TokenResult {
+    assert(self.mode == .in_equiv_expr);
+
+    if (self.index + 1 < self.inputs.len and
+        self.inputs[self.index] == '=' and
+        self.inputs[self.index + 1] == ']')
+    {
+        return .{ .token = .equivalence_class_end, .bytes = 2 };
+    }
+
+    var end = self.index;
+    while (end + 1 < self.inputs.len) {
+        if (self.inputs[end] == '=' and self.inputs[end + 1] == ']') {
+            break;
+        }
+
+        end += 1;
+    }
+
+    if (end + 1 >= self.inputs.len or self.inputs[end] != '=' or self.inputs[end + 1] != ']') {
+        std.debug.print("Error: Unterminated equivalence class name at index {d}\n", .{self.index});
+        return TokenResult.EOF;
+    }
+
+    if (end > self.index) {
+        const name_slice = self.inputs[self.index..end];
+
+        return .{ .token = .{ .equivalence_class_name = name_slice }, .bytes = end - self.index };
+    } else {
+        std.debug.print("Error: Empty equivalence class name at index {d}\n", .{self.index});
+        return TokenResult.EOF;
+    }
+}
+fn tokenizePosixExpr(self: *const EreTokenizer) TokenResult {
+    assert(self.mode == .in_posix_expr);
+    const c = self.inputs[self.index];
+
+    switch (c) {
+        ']' => {
+            if (self.is_first_in_bracket) {
+                return .{ .token = .{ .literal = c }, .bytes = 1 };
+            } else {
+                return .{ .token = .close_bracket, .bytes = 1 };
+            }
+        },
+        '[' => {
+            if (self.index + 1 >= self.inputs.len) {
+                return .{ .token = .{ .literal = c }, .bytes = 1 };
+            }
+            const next_c = self.inputs[self.index + 1];
+            switch (next_c) {
+                '.' => return .{ .token = .collating_element_start, .bytes = 2 },
+                '=' => return .{ .token = .equivalence_class_start, .bytes = 2 },
+                ':' => return .{ .token = .character_class_start, .bytes = 2 },
+                else => return .{ .token = .{ .literal = c }, .bytes = 1 },
+            }
+        },
+        '^' => {
+            if (self.is_first_in_bracket) {
+                return .{ .token = .bracket_negation, .bytes = 1 };
+            } else {
+                return .{ .token = .{ .literal = c }, .bytes = 1 };
+            }
+        },
+        '-' => {
+            if (!self.is_first_in_bracket and self.index + 1 < self.inputs.len and self.inputs[self.index + 1] != ']') {
+                return .{ .token = .bracket_range_operator, .bytes = 1 };
+            } else {
+                return .{ .token = .{ .literal = c }, .bytes = 1 };
+            }
+        },
+
+        '\\' => {
+            if (self.index + 1 < self.inputs.len) {
+                return .{ .token = .{ .literal = self.inputs[self.index + 1] }, .bytes = 2 };
+            } else {
+                return .{ .token = .{ .literal = c }, .bytes = 1 };
+            }
+        },
+        else => return .{ .token = .{ .literal = c }, .bytes = 1 },
+    }
+}
+
+fn tokenizeIntrvExpr(self: *const EreTokenizer) TokenResult {
+    assert(self.mode == .in_intrv_expr);
+    const c = self.inputs[self.index];
+
+    switch (c) {
+        '}' => return .{ .token = .close_interval_brace, .bytes = 1 },
+        ',' => return .{ .token = .interval_comma, .bytes = 1 },
+        else => {
+            if (ascii.isDigit(c)) {
+                var end = self.index + 1;
+                while (end < self.inputs.len and ascii.isDigit(self.inputs[end])) : (end += 1) {}
+                const num_slice = self.inputs[self.index..end];
+                const num = std.fmt.parseUnsigned(u32, num_slice, 10) catch {
+                    return .{ .token = .{ .literal = '{' }, .bytes = 1 };
+                };
+                return .{ .token = .{ .interval_number = num }, .bytes = end - self.index };
+            } else {
+                return .{ .token = .{ .literal = '{' }, .bytes = 1 };
+            }
+        },
+    }
+}
+
 fn expectTokens(input: []const u8, expected_kinds: []const Token.Kind) !void {
-    var lexer = Tokenizer.init(input);
+    var lex = EreTokenizer.init(input);
     var actual_tokens = std.ArrayList(Token.Kind).init(testing.allocator);
     defer actual_tokens.deinit();
 
     while (true) {
-        const token_res = lexer.peekInternal();
+        const token_res = lex.peekInternal();
         const token = token_res.token;
         if (token == .end_of_expression) break;
         try actual_tokens.append(token.tag());
-        lexer.advanceInternal(token_res.bytes);
+        lex.advanceInternal(token_res.bytes);
         if (token_res.bytes == 0 and token != .end_of_expression) {
             std.debug.print("Error: Tokenizer returned 0 bytes for token {any}\n", .{token});
             return error.ZeroByteToken;
         }
-        if (lexer.index > input.len) {
+        if (lex.index > input.len) {
             std.debug.print("Error: Lexer index out of bounds\n", .{});
             return error.IndexOutOfBounds;
         }
