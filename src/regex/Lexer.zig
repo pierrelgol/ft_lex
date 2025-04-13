@@ -1,5 +1,5 @@
 const std = @import("std");
-const Token = @import("Token.zig").Token;
+pub const Token = @import("Token.zig").Token;
 const Lexer = @This();
 
 ptr: *anyopaque,
