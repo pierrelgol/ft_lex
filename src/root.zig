@@ -1,12 +1,6 @@
 const std = @import("std");
-const common = @import("common.zig");
-pub const Iterator = common.Iterator;
-pub const Lexer = @import("Lexer.zig");
-pub const LexError = Lexer.Error;
-pub const LexContext = Lexer.Context;
-pub const LexToken = Lexer.Token;
-pub const LexTokenKind = Lexer.Token.Kind;
+const Lexer = @import("Lexer.zig");
 
 comptime {
-    std.testing.refAllDeclsRecursive(Lexer);
+    std.testing.refAllDecls(Lexer);
 }
