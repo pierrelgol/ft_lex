@@ -2,5 +2,6 @@ const std = @import("std");
 const regex = @import("regex.zig");
 
 comptime {
-    std.testing.refAllDecls(regex);
+    @setEvalBranchQuota(200000);
+    std.testing.refAllDeclsRecursive(regex);
 }

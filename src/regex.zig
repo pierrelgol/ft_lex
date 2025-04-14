@@ -1,39 +1,15 @@
 const std = @import("std");
 
-pub const Lexer = @import("regex/Lexer.zig");
 pub const Token = @import("regex/Token.zig").Token;
-pub const TokenResult = @import("regex/Token.zig").TokenResult;
-pub const RegexEre = @import("regex/ere.zig");
-pub const RegexBre = @import("regex/bre.zig");
-pub const RegexLex = @import("regex/lex.zig");
+pub const Lexer = @import("regex/Lexer.zig");
+pub const Parser = @import("regex/Parser.zig").Parser;
+pub const Ast = @import("regex/Ast.zig").Ast;
+pub const Node = Ast.Node;
 
-test "Lexer" {
-    const input: []const u8 = "ab|cd";
-
-    {
-        var ere: RegexBre = .init(input);
-        const lexer = ere.lexer();
-
-        while (lexer.peek() != .end_of_expression) {
-            std.debug.print("{}", .{lexer.next()});
-        }
-    }
-
-    {
-        var ere: RegexEre = .init(input);
-        const lexer = ere.lexer();
-
-        while (lexer.peek() != .end_of_expression) {
-            std.debug.print("{}", .{lexer.next()});
-        }
-    }
-
-    {
-        var ere: RegexLex = .init(input);
-        const lexer = ere.lexer();
-
-        while (lexer.peek() != .end_of_expression) {
-            std.debug.print("{}", .{lexer.next()});
-        }
-    }
+comptime {
+    std.testing.refAllDecls(Token);
+    std.testing.refAllDecls(Lexer);
+    std.testing.refAllDecls(Parser);
+    std.testing.refAllDecls(Ast);
+    std.testing.refAllDecls(Node);
 }

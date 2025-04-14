@@ -72,7 +72,6 @@ fn tokenizeRegexExpression(self: *Lexer, at: usize) Token {
         '$' => Token.AnchorEnd,
         '|' => Token.Alternation,
         '/' => Token.TrailingContext,
-        '\"' => Token.DoubleQuote,
         else => Token.init(.literal, self.getch(at)),
     };
 }
@@ -167,15 +166,6 @@ test "dot" {
     const input: []const u8 = ".";
     const expected = [_]Token.Kind{
         .dot,
-    };
-    var lexer: Lexer = .init(input);
-    try expectToken(&expected, &lexer);
-}
-
-test "double_quote" {
-    const input: []const u8 = "\"";
-    const expected = [_]Token.Kind{
-        .double_quote,
     };
     var lexer: Lexer = .init(input);
     try expectToken(&expected, &lexer);

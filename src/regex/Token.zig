@@ -7,7 +7,6 @@ pub const Token = union(Kind) {
     asterisk: void,
     backslash: void,
     dot: void,
-    double_quote: void,
     eof: void,
     left_brace: void,
     left_bracket: void,
@@ -42,7 +41,6 @@ pub const Token = union(Kind) {
         asterisk,         // '*'
         backslash,        // '\'
         dot,              // '.'
-        double_quote,     // '"'
         eof,              // '0'
         left_brace,       // '{'
         left_bracket,     // '['
@@ -67,7 +65,6 @@ pub const Token = union(Kind) {
     pub const Asterisk: Token = .{ .asterisk = {} };
     pub const Backslash: Token = .{ .backslash = {} };
     pub const Dot: Token = .{ .dot = {} };
-    pub const DoubleQuote: Token = .{ .double_quote = {} };
     pub const Eof: Token = .{ .eof = {} };
     pub const LeftBrace: Token = .{ .left_brace = {} };
     pub const LeftBracket: Token = .{ .left_bracket = {} };
