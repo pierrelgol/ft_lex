@@ -1,121 +1,81 @@
 const std = @import("std");
 
-pub const TokenResult = struct {
-    token: Token,
-    bytes: usize,
-
-    pub const EOF: TokenResult = .{ .token = .{ .end_of_expression = {} }, .bytes = 0 };
-};
-
 pub const Token = union(Kind) {
-    literal: u21,
-    start_anchor: void,
-    end_anchor: void,
-    any_character: void,
     alternation: void,
-    zero_or_more: void,
-    one_or_more: void,
-    zero_or_one: void,
-    open_group: void,
-    close_group: void,
-    open_bracket: void,
-    close_bracket: void,
-    open_interval_brace: void,
-    close_interval_brace: void,
-    interval_comma: void,
-    interval_number: u32,
+    anchor_end: void,
+    anchor_start: void,
+    asterisk: void,
     backslash: void,
-    backreference: u8,
-    bracket_range_operator: void,
-    bracket_negation: void,
-    character_class_start: void,
-    character_class_end: void,
-    character_class_name: []const u8,
-    collating_element_start: void,
-    collating_element_end: void,
-    collating_element_name: []const u8,
-    equivalence_class_start: void,
-    equivalence_class_end: void,
-    equivalence_class_name: []const u8,
-    end_of_expression: void,
+    dot: void,
+    double_quote: void,
+    eof: void,
+    left_brace: void,
+    left_bracket: void,
+    left_parenthesis: void,
+    literal: u8,
+    plus: void,
+    question_mark: void,
+    right_brace: void,
+    right_bracket: void,
+    right_parenthesis: void,
+    trailing_context: void,
 
+    pub fn init(comptime kind: Kind, init_expr: anytype) Token {
+        return @unionInit(Token, @tagName(kind), init_expr);
+    }
+
+    pub fn eql(self: *const Token, token: Token) bool {
+        if (self.tag() == token.tag()) {
+            return switch (self.*) {
+                .literal => if (self.literal == token.literal) true else false,
+                else => true,
+            };
+        }
+        return false;
+    }
+
+    // zig fmt: off
     pub const Kind = enum {
-        literal,
-        start_anchor,
-        end_anchor,
-        any_character,
-        alternation,
-        zero_or_more,
-        one_or_more,
-        zero_or_one,
-        open_group,
-        close_group,
-        open_bracket,
-        close_bracket,
-        open_interval_brace,
-        close_interval_brace,
-        interval_comma,
-        interval_number,
-        backslash,
-        backreference,
-        bracket_range_operator,
-        bracket_negation,
-        character_class_start,
-        character_class_end,
-        character_class_name,
-        collating_element_start,
-        collating_element_end,
-        collating_element_name,
-        equivalence_class_start,
-        equivalence_class_end,
-        equivalence_class_name,
-        end_of_expression,
+        alternation,      // '|'
+        anchor_end,       // '$'
+        anchor_start,     // '^'
+        asterisk,         // '*'
+        backslash,        // '\'
+        dot,              // '.'
+        double_quote,     // '"'
+        eof,              // '0'
+        left_brace,       // '{'
+        left_bracket,     // '['
+        left_parenthesis, // '('
+        literal,          // 'c'
+        plus,             // '+'
+        question_mark,    // '?'
+        right_brace,      // '}'
+        right_bracket,    // ']'
+        right_parenthesis,// ')'
+        trailing_context, // '/'
     };
+    // zig fmt: on
 
     pub fn tag(self: *const Token) Token.Kind {
         return std.meta.activeTag(self.*);
     }
 
-    pub fn format(
-        self: @This(),
-        comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
-        _ = fmt;
-        _ = options;
-
-        switch (self) {
-            .start_anchor => try writer.print("^", .{}),
-            .end_anchor => try writer.print("$", .{}),
-            .any_character => try writer.print(".", .{}),
-            .alternation => try writer.print("|", .{}),
-            .zero_or_more => try writer.print("*", .{}),
-            .one_or_more => try writer.print("+", .{}),
-            .zero_or_one => try writer.print("?", .{}),
-            .open_group => try writer.print("(", .{}),
-            .close_group => try writer.print(")", .{}),
-            .open_bracket => try writer.print("[", .{}),
-            .close_bracket => try writer.print("]", .{}),
-            .open_interval_brace => try writer.print("{{", .{}),
-            .close_interval_brace => try writer.print("}}", .{}),
-            .interval_comma => try writer.print(",", .{}),
-            .backslash => try writer.print("\\", .{}),
-            .bracket_range_operator => try writer.print("-", .{}),
-            .bracket_negation => try writer.print("^", .{}),
-            .character_class_start => try writer.print("[:", .{}),
-            .character_class_end => try writer.print(":]", .{}),
-            .collating_element_start => try writer.print("[.", .{}),
-            .collating_element_end => try writer.print(".]", .{}),
-            .equivalence_class_start => try writer.print("[=", .{}),
-            .equivalence_class_end => try writer.print("=]", .{}),
-            .literal => |v| try writer.print("{u}", .{v}),
-            .interval_number => |v| try writer.print("{d}", .{v}),
-            .backreference => |v| try writer.print("\\{d}", .{v}),
-            .character_class_name => |v| try writer.print("{s}", .{v}),
-            .collating_element_name => |v| try writer.print("{s}", .{v}),
-            .equivalence_class_name => |v| try writer.print("{s}", .{v}),
-            .end_of_expression => try writer.print("EOF", .{}),
-        }
-    }
+    pub const Alternation: Token = .{ .alternation = {} };
+    pub const AnchorEnd: Token = .{ .anchor_end = {} };
+    pub const AnchorStart: Token = .{ .anchor_start = {} };
+    pub const Asterisk: Token = .{ .asterisk = {} };
+    pub const Backslash: Token = .{ .backslash = {} };
+    pub const Dot: Token = .{ .dot = {} };
+    pub const DoubleQuote: Token = .{ .double_quote = {} };
+    pub const Eof: Token = .{ .eof = {} };
+    pub const LeftBrace: Token = .{ .left_brace = {} };
+    pub const LeftBracket: Token = .{ .left_bracket = {} };
+    pub const LeftParenthesis: Token = .{ .left_parenthesis = {} };
+    pub const Plus: Token = .{ .plus = {} };
+    pub const QuestionMark: Token = .{ .question_mark = {} };
+    pub const RightBrace: Token = .{ .right_brace = {} };
+    pub const RightBracket: Token = .{ .right_bracket = {} };
+    pub const RightParenthesis: Token = .{ .right_parenthesis = {} };
+    pub const TrailingContext: Token = .{ .trailing_context = {} };
 };
