@@ -10,11 +10,9 @@ const Charset = std.StaticBitSet(std.math.maxInt(u8));
 pub const Ast = struct {
     pool: heap.MemoryPool(Node),
     root: ?*Node,
-    gpa: Allocator, // Store allocator for potential use
 
     pub const Node = union(Kind) {
         literal: u8,
-        // FUTURE NODE KINDS WILL GO HERE:
         // concatenation: struct { lhs: *Node, rhs: *Node },
         // alternation: struct { lhs: *Node, rhs: *Node },
         // quantifier: struct { min: u32, max: ?u32, greedy: bool, target: *Node },
@@ -39,22 +37,16 @@ pub const Ast = struct {
             // definition_ref,
         };
 
-        // No longer needed if Node has format
-        // pub fn init(comptime kind: Kind, init_expr: anytype) Node { ... }
-
         pub fn tag(self: *const Node) Kind {
             return std.meta.activeTag(self.*);
         }
 
-        // Implement the format function for the Node itself
         pub fn format(
-            self: @This(), // Takes Node by value
+            self: @This(),
             comptime format_string: []const u8,
             options: fmt.FormatOptions,
             writer: anytype,
         ) !void {
-            // Basic S-expression format - adjust as needed
-            // Ignore format_string and options for this custom format
             _ = format_string;
             _ = options;
 
@@ -109,7 +101,6 @@ pub const Ast = struct {
         return .{
             .pool = heap.MemoryPool(Node).init(gpa),
             .root = null,
-            .gpa = gpa, // Store allocator
         };
     }
 
@@ -118,42 +109,25 @@ pub const Ast = struct {
         self.pool.deinit();
     }
 
-    // Now takes initialiser value directly
     pub fn createNode(self: *Ast, comptime kind: Node.Kind, init_value: anytype) Allocator.Error!*Node {
         const node_ptr = try self.pool.create();
         node_ptr.* = @unionInit(Node, @tagName(kind), init_value);
         return node_ptr;
     }
 
-    // Ast.format now delegates to the root node's format
     pub fn format(
         self: @This(),
         comptime fmt_string: []const u8,
         options: fmt.FormatOptions,
         writer: anytype,
     ) !void {
-        // Ignore fmt_string and options for this custom format
         _ = fmt_string;
         _ = options;
 
         if (self.root) |root_node| {
-            // Let Node.format handle the recursive printing
-            try writer.print("{}", .{root_node.*}); // Pass Node by value to its format fn
-            // Note: std.fmt automatically handles printing the value
-            // pointed to by root_node if Node implements format.
-            // Passing .{root_node} would print the pointer address.
-            // Passing .{root_node.*} explicitly calls Node.format.
+            try writer.print("{}", .{root_node.*});
         } else {
             try writer.writeAll("(empty ast)");
         }
     }
 };
-
-// Helper function example (needs to be defined or placed appropriately)
-// fn formatCharset(buffer: []u8, charset: Charset) ![]const u8 {
-//    // Implementation to format the charset into a string like "[abc-f]" or "[^a-z]"
-//    // Needs careful handling of ranges and escaping.
-//    _ = charset;
-//    _ = buffer;
-//    @panic("formatCharset not implemented");
-// }
