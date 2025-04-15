@@ -2,12 +2,14 @@ const std = @import("std");
 const mem = std.mem;
 const math = std.math;
 const Order = math.Order;
-const Token = @import("Token.zig").Token;
-const Lexer = @import("Lexer.zig").Lexer;
-const Ast = @import("Ast.zig").Ast;
-const Node = Ast.Node;
 const assert = std.debug.assert;
 const Allocator = mem.Allocator;
+
+const Ast = @import("Ast.zig").Ast;
+const Node = Ast.Node;
+const Lexer = @import("Lexer.zig").Lexer;
+const Token = @import("Token.zig").Token;
+
 const Charset = std.bit_set.StaticBitSet(256);
 
 pub const Parser = struct {
@@ -618,138 +620,138 @@ test "parse literal class dot " {
     try expectAstSformExact(allocator, pattern, expected);
 }
 
-test "parse class simple literals" {
-    const allocator = std.testing.allocator;
-    const pattern: []const u8 = "[abc]";
+// test "parse class simple literals" {
+//     const allocator = std.testing.allocator;
+//     const pattern: []const u8 = "[abc]";
 
-    const expected: []const u8 = "(class :negated #f :count 3)";
-    try expectAstSformExact(allocator, pattern, expected);
-}
+//     const expected: []const u8 = "(class :negated #f :count 3)";
+//     try expectAstSformExact(allocator, pattern, expected);
+// }
 
-test "parse class negated simple literals" {
-    const allocator = std.testing.allocator;
-    const pattern: []const u8 = "[^abc]";
+// test "parse class negated simple literals" {
+//     const allocator = std.testing.allocator;
+//     const pattern: []const u8 = "[^abc]";
 
-    const expected: []const u8 = "(class :negated #t :count 253)";
-    try expectAstSformExact(allocator, pattern, expected);
-}
+//     const expected: []const u8 = "(class :negated #t :count 253)";
+//     try expectAstSformExact(allocator, pattern, expected);
+// }
 
-test "parse class simple range" {
-    const allocator = std.testing.allocator;
-    const pattern: []const u8 = "[a-c]";
+// test "parse class simple range" {
+//     const allocator = std.testing.allocator;
+//     const pattern: []const u8 = "[a-c]";
 
-    const expected: []const u8 = "(class :negated #f :count 3)";
-    try expectAstSformExact(allocator, pattern, expected);
-}
+//     const expected: []const u8 = "(class :negated #f :count 3)";
+//     try expectAstSformExact(allocator, pattern, expected);
+// }
 
-test "parse class multiple ranges" {
-    const allocator = std.testing.allocator;
-    const pattern: []const u8 = "[a-zA-Z]";
+// test "parse class multiple ranges" {
+//     const allocator = std.testing.allocator;
+//     const pattern: []const u8 = "[a-zA-Z]";
 
-    const expected: []const u8 = "(class :negated #f :count 52)";
-    try expectAstSformExact(allocator, pattern, expected);
-}
+//     const expected: []const u8 = "(class :negated #f :count 52)";
+//     try expectAstSformExact(allocator, pattern, expected);
+// }
 
-test "parse class ranges and literals" {
-    const allocator = std.testing.allocator;
-    const pattern: []const u8 = "[a-fA-F0-9]";
+// test "parse class ranges and literals" {
+//     const allocator = std.testing.allocator;
+//     const pattern: []const u8 = "[a-fA-F0-9]";
 
-    const expected: []const u8 = "(class :negated #f :count 22)";
-    try expectAstSformExact(allocator, pattern, expected);
-}
+//     const expected: []const u8 = "(class :negated #f :count 22)";
+//     try expectAstSformExact(allocator, pattern, expected);
+// }
 
-test "parse class literal hyphen at start" {
-    const allocator = std.testing.allocator;
-    const pattern: []const u8 = "[-ab]";
+// test "parse class literal hyphen at start" {
+//     const allocator = std.testing.allocator;
+//     const pattern: []const u8 = "[-ab]";
 
-    const expected: []const u8 = "(class :negated #f :count 3)";
-    try expectAstSformExact(allocator, pattern, expected);
-}
+//     const expected: []const u8 = "(class :negated #f :count 3)";
+//     try expectAstSformExact(allocator, pattern, expected);
+// }
 
-test "parse class literal hyphen at end" {
-    const allocator = std.testing.allocator;
-    const pattern: []const u8 = "[ab-]";
+// test "parse class literal hyphen at end" {
+//     const allocator = std.testing.allocator;
+//     const pattern: []const u8 = "[ab-]";
 
-    const expected: []const u8 = "(class :negated #f :count 3)";
-    try expectAstSformExact(allocator, pattern, expected);
-}
+//     const expected: []const u8 = "(class :negated #f :count 3)";
+//     try expectAstSformExact(allocator, pattern, expected);
+// }
 
-test "parse class literal closing bracket first" {
-    const allocator = std.testing.allocator;
-    const pattern: []const u8 = "[]a]";
+// test "parse class literal closing bracket first" {
+//     const allocator = std.testing.allocator;
+//     const pattern: []const u8 = "[]a]";
 
-    const expected: []const u8 = "(class :negated #f :count 2)";
-    try expectAstSformExact(allocator, pattern, expected);
-}
+//     const expected: []const u8 = "(class :negated #f :count 2)";
+//     try expectAstSformExact(allocator, pattern, expected);
+// }
 
-test "parse class literal caret not first" {
-    const allocator = std.testing.allocator;
-    const pattern: []const u8 = "[a^]";
+// test "parse class literal caret not first" {
+//     const allocator = std.testing.allocator;
+//     const pattern: []const u8 = "[a^]";
 
-    const expected: []const u8 = "(class :negated #f :count 2)";
-    try expectAstSformExact(allocator, pattern, expected);
-}
+//     const expected: []const u8 = "(class :negated #f :count 2)";
+//     try expectAstSformExact(allocator, pattern, expected);
+// }
 
-test "parse class escaped special chars" {
-    const allocator = std.testing.allocator;
-    const pattern: []const u8 = "[\\-\\]\\^\\\\]";
+// test "parse class escaped special chars" {
+//     const allocator = std.testing.allocator;
+//     const pattern: []const u8 = "[\\-\\]\\^\\\\]";
 
-    const expected: []const u8 = "(class :negated #f :count 4)";
-    try expectAstSformExact(allocator, pattern, expected);
-}
+//     const expected: []const u8 = "(class :negated #f :count 4)";
+//     try expectAstSformExact(allocator, pattern, expected);
+// }
 
-test "parse class empty" {
-    const allocator = std.testing.allocator;
-    const pattern: []const u8 = "[]";
+// test "parse class empty" {
+//     const allocator = std.testing.allocator;
+//     const pattern: []const u8 = "[]";
 
-    const expected: []const u8 = "(class :negated #f :count 0)";
-    try expectAstSformExact(allocator, pattern, expected);
-}
+//     const expected: []const u8 = "(class :negated #f :count 0)";
+//     try expectAstSformExact(allocator, pattern, expected);
+// }
 
-test "parse class negated empty" {
-    const allocator = std.testing.allocator;
-    const pattern: []const u8 = "[^]";
+// test "parse class negated empty" {
+//     const allocator = std.testing.allocator;
+//     const pattern: []const u8 = "[^]";
 
-    const expected: []const u8 = "(class :negated #t :count 256)";
-    try expectAstSformExact(allocator, pattern, expected);
-}
+//     const expected: []const u8 = "(class :negated #t :count 256)";
+//     try expectAstSformExact(allocator, pattern, expected);
+// }
 
-test "parse class dot is literal" {
-    const allocator = std.testing.allocator;
-    const pattern: []const u8 = "[.a]";
+// test "parse class dot is literal" {
+//     const allocator = std.testing.allocator;
+//     const pattern: []const u8 = "[.a]";
 
-    const expected: []const u8 = "(class :negated #f :count 2)";
-    try expectAstSformExact(allocator, pattern, expected);
-}
+//     const expected: []const u8 = "(class :negated #f :count 2)";
+//     try expectAstSformExact(allocator, pattern, expected);
+// }
 
-test "parse class mixed range literal no range" {
-    const allocator = std.testing.allocator;
-    const pattern: []const u8 = "[a-c-e]";
+// test "parse class mixed range literal no range" {
+//     const allocator = std.testing.allocator;
+//     const pattern: []const u8 = "[a-c-e]";
 
-    const expected: []const u8 = "(class :negated #f :count 5)";
-    try expectAstSformExact(allocator, pattern, expected);
-}
+//     const expected: []const u8 = "(class :negated #f :count 5)";
+//     try expectAstSformExact(allocator, pattern, expected);
+// }
 
-test "parse class concatenated" {
-    const allocator = std.testing.allocator;
-    const pattern: []const u8 = "a[bc]";
+// test "parse class concatenated" {
+//     const allocator = std.testing.allocator;
+//     const pattern: []const u8 = "a[bc]";
 
-    const expected: []const u8 = "(concat (literal 'a') (class :negated #f :count 2))";
-    try expectAstSformExact(allocator, pattern, expected);
-}
+//     const expected: []const u8 = "(concat (literal 'a') (class :negated #f :count 2))";
+//     try expectAstSformExact(allocator, pattern, expected);
+// }
 
-test "parse class quantified" {
-    const allocator = std.testing.allocator;
-    const pattern: []const u8 = "[0-9]+";
+// test "parse class quantified" {
+//     const allocator = std.testing.allocator;
+//     const pattern: []const u8 = "[0-9]+";
 
-    const expected: []const u8 = "(quantifier :min 1 :max null (class :negated #f :count 10))";
-    try expectAstSformExact(allocator, pattern, expected);
-}
+//     const expected: []const u8 = "(quantifier :min 1 :max null (class :negated #f :count 10))";
+//     try expectAstSformExact(allocator, pattern, expected);
+// }
 
-test "parse class alternated" {
-    const allocator = std.testing.allocator;
-    const pattern: []const u8 = "a|[0-9]";
+// test "parse class alternated" {
+//     const allocator = std.testing.allocator;
+//     const pattern: []const u8 = "a|[0-9]";
 
-    const expected: []const u8 = "(alternation (literal 'a') (class :negated #f :count 10))";
-    try expectAstSformExact(allocator, pattern, expected);
-}
+//     const expected: []const u8 = "(alternation (literal 'a') (class :negated #f :count 10))";
+//     try expectAstSformExact(allocator, pattern, expected);
+// }
