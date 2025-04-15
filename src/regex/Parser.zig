@@ -108,6 +108,7 @@ pub const Parser = struct {
             .question_mark => self.ledZeroOrOne(left),
             .plus => self.ledOneOrMore(left),
             .asterisk => self.ledZeroOrMore(left),
+            .left_brace => self.ledIntervalExpression(left),
             .eof => error.UnexpectedEOF,
             else => error.LedNotImplemented,
         };
@@ -188,6 +189,82 @@ pub const Parser = struct {
         });
     }
 
+    const usize_digits_length: usize = std.math.log10_int(@as(usize, std.math.maxInt(usize)));
+
+    fn parseIntervalNumber(self: *Parser) ParseError!usize {
+        if (self.token.kind() != .literal or !std.ascii.isDigit(self.token.literal)) {
+            return error.SyntaxError;
+        }
+
+        var buffer = std.BoundedArray(u8, usize_digits_length).init(0) catch unreachable;
+
+        while (true) {
+            switch (self.token) {
+                .literal => |c| switch (c) {
+                    '0'...'9' => buffer.appendAssumeCapacity(self.next().literal),
+                    ',', '}' => break,
+                    else => break,
+                },
+                .comma, .right_brace => break,
+                else => return error.SyntaxError,
+            }
+        }
+
+        return std.fmt.parseUnsigned(usize, buffer.constSlice(), 10) catch {
+            return error.SyntaxError;
+        };
+    }
+
+    fn ledIntervalExpression(self: *Parser, left: *Node) ParseError!*Node {
+        assert(self.token.kind() == .left_brace);
+        self.eats(1);
+
+        const min = try self.parseIntervalNumber();
+
+        if (self.token.kind() == .right_brace) {
+            self.eats(1);
+            return self.createNode(.{
+                .quantifier = .{
+                    .min = min,
+                    .max = min,
+                    .lhs = left,
+                },
+            });
+        }
+
+        if (self.token.kind() != .comma) {
+            return error.SyntaxError;
+        } else {
+            self.eats(1);
+        }
+
+        if (self.token.kind() == .right_brace) {
+            return self.createNode(.{
+                .quantifier = .{
+                    .min = min,
+                    .max = null,
+                    .lhs = left,
+                },
+            });
+        }
+
+        const max = try self.parseIntervalNumber();
+
+        if (self.token.kind() != .right_brace) {
+            return error.SyntaxError;
+        } else {
+            self.eats(1);
+        }
+
+        return self.createNode(.{
+            .quantifier = .{
+                .min = min,
+                .max = max,
+                .lhs = left,
+            },
+        });
+    }
+
     fn compareBindingPower(self: *Parser, bp: BindingPower) Order {
         const current_token_kind = self.token.kind();
         const current_bp_value = switch (current_token_kind) {
@@ -198,6 +275,8 @@ pub const Parser = struct {
             .asterisk => @intFromEnum(BindingPower.quantifier),
             .left_parenthesis => @intFromEnum(BindingPower.grouping),
             .right_parenthesis => @intFromEnum(BindingPower.none),
+            .left_brace => @intFromEnum(BindingPower.interval_expression),
+            .right_brace => @intFromEnum(BindingPower.none),
             else => @intFromEnum(BindingPower.none),
         };
         const min_bp_value: u8 = @intFromEnum(bp);
@@ -360,5 +439,26 @@ test "parse two group zero-or-more quantifier" {
     const allocator = std.testing.allocator;
     const pattern: []const u8 = "(a)*(b)*";
     const expected: []const u8 = "(concat (quantifier :min 0 :max null (group (literal 'a'))) (quantifier :min 0 :max null (group (literal 'b'))))";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse interval simple" {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "a{1}";
+    const expected: []const u8 = "(quantifier :min 1 :max 1 (literal 'a'))";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse interval range" {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "a{1,2}";
+    const expected: []const u8 = "(quantifier :min 1 :max 2 (literal 'a'))";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse interval range empty" {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "a{1,}";
+    const expected: []const u8 = "(quantifier :min 1 :max null (literal 'a'))";
     try expectAstSformExact(allocator, pattern, expected);
 }
