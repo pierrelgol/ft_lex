@@ -109,6 +109,7 @@ pub const Parser = struct {
             .plus => self.ledOneOrMore(left),
             .asterisk => self.ledZeroOrMore(left),
             .left_brace => self.ledIntervalExpression(left),
+            .alternation => self.ledAlternation(left),
             .eof => error.UnexpectedEOF,
             else => error.LedNotImplemented,
         };
@@ -261,6 +262,17 @@ pub const Parser = struct {
                 .min = min,
                 .max = max,
                 .lhs = left,
+            },
+        });
+    }
+
+    fn ledAlternation(self: *Parser, left: *Node) ParseError!*Node {
+        assert(self.token.kind() == .alternation);
+        self.eats(1);
+        return self.createNode(.{
+            .alternation = .{
+                .lhs = left,
+                .rhs = try self.parseExpression(.alternation),
             },
         });
     }
@@ -460,5 +472,89 @@ test "parse interval range empty" {
     const allocator = std.testing.allocator;
     const pattern: []const u8 = "a{1,}";
     const expected: []const u8 = "(quantifier :min 1 :max null (literal 'a'))";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse alternation simple" {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "a|b";
+    const expected: []const u8 = "(alternation (literal 'a') (literal 'b'))";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse alternation multiple" {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "a|b|c";
+    const expected: []const u8 = "(alternation (alternation (literal 'a') (literal 'b')) (literal 'c'))";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse alternation precedence vs concat (left)" {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "ab|c";
+    const expected: []const u8 = "(alternation (concat (literal 'a') (literal 'b')) (literal 'c'))";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse alternation precedence vs concat (right)" {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "a|bc";
+    const expected: []const u8 = "(alternation (literal 'a') (concat (literal 'b') (literal 'c')))";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse alternation precedence vs quantifier (left)" {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "a*|b";
+    const expected: []const u8 = "(alternation (quantifier :min 0 :max null (literal 'a')) (literal 'b'))";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse alternation precedence vs quantifier (right)" {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "a|b*";
+    const expected: []const u8 = "(alternation (literal 'a') (quantifier :min 0 :max null (literal 'b')))";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse alternation precedence multiple quantifiers" {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "a?|b+";
+    const expected: []const u8 = "(alternation (quantifier :min 0 :max 1 (literal 'a')) (quantifier :min 1 :max null (literal 'b')))";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse alternation inside group concatenated left" {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "(a|b)c";
+    const expected: []const u8 = "(concat (group (alternation (literal 'a') (literal 'b'))) (literal 'c'))";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse alternation inside group concatenated right" {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "a(b|c)";
+    const expected: []const u8 = "(concat (literal 'a') (group (alternation (literal 'b') (literal 'c'))))";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse alternation with groups explicitly left assoc" {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "(a|b)|c";
+    const expected: []const u8 = "(alternation (group (alternation (literal 'a') (literal 'b'))) (literal 'c'))";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse alternation with groups explicitly right assoc" {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "a|(b|c)";
+    const expected: []const u8 = "(alternation (literal 'a') (group (alternation (literal 'b') (literal 'c'))))";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse alternation complex mix" {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "a*b|c?d|e";
+    const expected: []const u8 = "(alternation (alternation (concat (quantifier :min 0 :max null (literal 'a')) (literal 'b')) (concat (quantifier :min 0 :max 1 (literal 'c')) (literal 'd'))) (literal 'e'))";
     try expectAstSformExact(allocator, pattern, expected);
 }
