@@ -119,7 +119,6 @@ pub const Parser = struct {
             .literal => self.nudLiteral(),
             .left_parenthesis => self.nudGroup(),
             .dot => self.nudDot(),
-            .left_bracket => self.nudClass(),
             .eof => error.UnexpectedEOF,
             else => error.NudNotImplemented,
         };
