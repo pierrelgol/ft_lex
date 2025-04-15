@@ -8,6 +8,7 @@ const Ast = @import("Ast.zig").Ast;
 const Node = Ast.Node;
 const assert = std.debug.assert;
 const Allocator = mem.Allocator;
+const Charset = std.bit_set.StaticBitSet(256);
 
 pub const Parser = struct {
     lexer: Lexer,
@@ -39,6 +40,7 @@ pub const Parser = struct {
         UnclosedBrace,
         UnclosedCondition,
         UnclosedIdentifier,
+        EmptyGroup,
         SyntaxError,
     } || Allocator.Error;
 
@@ -55,8 +57,20 @@ pub const Parser = struct {
         return prev_token;
     }
 
+    fn nextLiteral(self: *Parser) Token {
+        const prev_token = self.token.toLiteral();
+        self.token = self.lexer.next();
+        return prev_token;
+    }
+
     fn peek(self: *Parser) Token {
         return self.lexer.peek();
+    }
+
+    fn peekLiteral(self: *Parser) Token {
+        var token = self.lexer.peek();
+        token = token.toLiteral();
+        return token;
     }
 
     fn curr(self: *Parser) Token {
@@ -95,6 +109,7 @@ pub const Parser = struct {
         return switch (current_token.kind()) {
             .literal => self.nudLiteral(),
             .left_parenthesis => self.nudGroup(),
+            .dot => self.nudDot(),
             .eof => error.UnexpectedEOF,
             else => error.NudNotImplemented,
         };
@@ -107,6 +122,7 @@ pub const Parser = struct {
             .left_parenthesis => self.ledImplicitConcat(left),
             .question_mark => self.ledZeroOrOne(left),
             .plus => self.ledOneOrMore(left),
+            .dot => self.ledImplicitConcat(left),
             .asterisk => self.ledZeroOrMore(left),
             .left_brace => self.ledIntervalExpression(left),
             .alternation => self.ledAlternation(left),
@@ -128,6 +144,9 @@ pub const Parser = struct {
     fn nudGroup(self: *Parser) ParseError!*Node {
         assert(self.token.kind() == .left_parenthesis);
         _ = self.eats(1);
+        if (self.token.kind() == .right_parenthesis) {
+            return error.EmptyGroup;
+        }
         const group = try self.parseExpression(.none);
         assert(self.token.kind() == .right_parenthesis);
         self.eats(1);
@@ -135,11 +154,25 @@ pub const Parser = struct {
         return self.createNode(.{ .group = group });
     }
 
+    fn nudDot(self: *Parser) ParseError!*Node {
+        assert(self.token.kind() == .dot);
+        _ = self.eats(1);
+        return self.createNode(.{
+            .class = .{
+                .negated = false,
+                .charset = charset: {
+                    var value: Charset = .initFull();
+                    value.setValue('\n', false);
+                    break :charset value;
+                },
+            },
+        });
+    }
+
     fn ledLiteral(self: *Parser, left: *Node) ParseError!*Node {
         return self.createNode(.{
             .concat = .{
                 .lhs = left,
-
                 .rhs = try self.parseExpression(.concatenation),
             },
         });
@@ -289,6 +322,7 @@ pub const Parser = struct {
             .right_parenthesis => @intFromEnum(BindingPower.none),
             .left_brace => @intFromEnum(BindingPower.interval_expression),
             .right_brace => @intFromEnum(BindingPower.none),
+            .dot => @intFromEnum(BindingPower.class),
             else => @intFromEnum(BindingPower.none),
         };
         const min_bp_value: u8 = @intFromEnum(bp);
@@ -556,5 +590,19 @@ test "parse alternation complex mix" {
     const allocator = std.testing.allocator;
     const pattern: []const u8 = "a*b|c?d|e";
     const expected: []const u8 = "(alternation (alternation (concat (quantifier :min 0 :max null (literal 'a')) (literal 'b')) (concat (quantifier :min 0 :max 1 (literal 'c')) (literal 'd'))) (literal 'e'))";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse dot class literal " {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = ".a";
+    const expected: []const u8 = "(concat (class :negated #f :count 255) (literal 'a'))";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse literal class dot " {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "a.";
+    const expected: []const u8 = "(concat (literal 'a') (class :negated #f :count 255))";
     try expectAstSformExact(allocator, pattern, expected);
 }
