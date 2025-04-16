@@ -117,6 +117,7 @@ pub const Parser = struct {
             .left_parenthesis => self.nudGroup(),
             .backslash => self.nudEscaped(),
             .left_bracket => self.nudClass(),
+            .double_quote => self.nudQuote(),
             .dot => self.nudDot(),
             .eof => error.UnexpectedEOF,
             else => {
@@ -138,6 +139,7 @@ pub const Parser = struct {
             .asterisk => self.ledZeroOrMore(left),
             .left_brace => self.ledIntervalExpression(left),
             .alternation => self.ledAlternation(left),
+            .double_quote => try self.ledImplicitConcat(left),
             .eof => error.UnexpectedEOF,
             else => error.LedNotImplemented,
         };
@@ -177,6 +179,32 @@ pub const Parser = struct {
                     value.setValue('\n', false);
                     break :charset value;
                 },
+            },
+        });
+    }
+
+    fn nudQuote(self: *Parser) ParseError!*Node {
+        assert(self.token.kind() == .double_quote);
+        self.eats(1);
+
+        var buffer = std.BoundedArray(u8, 256).init(0) catch unreachable;
+        while (true) {
+            if (self.currLiteral() == '"') {
+                break;
+            }
+
+            if (self.currLiteral() == 0x00) {
+                return error.UnclosedQuote;
+            }
+            buffer.appendAssumeCapacity(self.nextLiteral());
+        }
+        assert(self.token.kind() == .double_quote);
+        self.eats(1);
+        const allocator = self.ast.scratchAllocator();
+        const string = try allocator.dupe(u8, buffer.constSlice());
+        return self.createNode(.{
+            .quoted = .{
+                .string = string,
             },
         });
     }
@@ -520,6 +548,7 @@ pub const Parser = struct {
             .left_bracket => @intFromEnum(BindingPower.class),
             .right_bracket => @intFromEnum(BindingPower.none),
             .backslash => @intFromEnum(BindingPower.escaped),
+            .double_quote => @intFromEnum(BindingPower.quoting),
             .eof => @intFromEnum(BindingPower.none),
             .dot => @intFromEnum(BindingPower.class),
             else => @intFromEnum(BindingPower.none),
@@ -991,5 +1020,36 @@ test "parse multiple mixed escapes concatenated" {
     const pattern: []const u8 = "\\t\\x41\\\\\\(\\n";
 
     const expected: []const u8 = "(concat (literal 'tab') (concat (literal 'A') (concat (literal 'escaped') (concat (literal '(') (literal 'newline')))))";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse quoted simple string" {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "\"abc\"";
+    const expected: []const u8 = "(quoted abc)";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse quoted string with metacharacters" {
+    const allocator = std.testing.allocator;
+
+    const pattern: []const u8 = "\"a*b.\"";
+    const expected: []const u8 = "(quoted a*b.)";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse quoted empty string" {
+    const allocator = std.testing.allocator;
+
+    const pattern: []const u8 = "\"\"";
+    const expected: []const u8 = "(quoted )";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse concatenation with quoted string" {
+    const allocator = std.testing.allocator;
+
+    const pattern: []const u8 = "a\"b*c\"d";
+    const expected: []const u8 = "(concat (concat (literal 'a') (quoted b*c)) (literal 'd'))";
     try expectAstSformExact(allocator, pattern, expected);
 }

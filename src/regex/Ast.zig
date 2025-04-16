@@ -62,6 +62,9 @@ pub const Ast = struct {
             lhs: *Node,
             rhs: *Node,
         },
+        quoted: struct {
+            string: []const u8,
+        },
 
         pub const Kind = enum {
             alternation,
@@ -74,6 +77,7 @@ pub const Ast = struct {
             literal,
             quantifier,
             trailing,
+            quoted,
         };
 
         pub fn format(
@@ -129,6 +133,9 @@ pub const Ast = struct {
                 },
                 .trailing => |trail| {
                     try writer.print("(trailing {any} {any})", .{ trail.lhs, trail.rhs });
+                },
+                .quoted => |quote| {
+                    try writer.print("(quoted {s})", .{quote.string});
                 },
             }
         }
