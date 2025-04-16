@@ -115,6 +115,7 @@ pub const Parser = struct {
         return switch (current_token.kind()) {
             .literal => self.nudLiteral(),
             .left_parenthesis => self.nudGroup(),
+            .backslash => self.nudEscaped(),
             .left_bracket => self.nudClass(),
             .dot => self.nudDot(),
             .eof => error.UnexpectedEOF,
@@ -133,6 +134,7 @@ pub const Parser = struct {
             .plus => self.ledOneOrMore(left),
             .dot => self.ledImplicitConcat(left),
             .left_bracket => self.ledImplicitConcat(left),
+            .backslash => self.ledImplicitConcat(left),
             .asterisk => self.ledZeroOrMore(left),
             .left_brace => self.ledIntervalExpression(left),
             .alternation => self.ledAlternation(left),
@@ -281,6 +283,14 @@ pub const Parser = struct {
                 break :tok lit_token;
             },
         };
+    }
+
+    fn nudEscaped(self: *Parser) ParseError!*Node {
+        assert(self.token.kind() == .backslash);
+        const token = try self.parseEscapedSequence();
+        return self.createNode(.{
+            .literal = token.literal,
+        });
     }
 
     fn nudClass(self: *Parser) ParseError!*Node {
@@ -509,6 +519,7 @@ pub const Parser = struct {
             .right_brace => @intFromEnum(BindingPower.none),
             .left_bracket => @intFromEnum(BindingPower.class),
             .right_bracket => @intFromEnum(BindingPower.none),
+            .backslash => @intFromEnum(BindingPower.escaped),
             .eof => @intFromEnum(BindingPower.none),
             .dot => @intFromEnum(BindingPower.class),
             else => @intFromEnum(BindingPower.none),
@@ -907,5 +918,78 @@ test "parse class literal hyphen at end" {
     const pattern: []const u8 = "[a-c-]";
 
     const expected: []const u8 = "(class :negated #f :count 4)";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse escaped tab" {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "\\t";
+    const expected: []const u8 = "(literal 'tab')";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse escaped quantifier metacharacter" {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "\\?";
+    const expected: []const u8 = "(literal '?')";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse hex escape in concatenation" {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "a\\x42c";
+    const expected: []const u8 = "(concat (concat (literal 'a') (literal 'B')) (literal 'c'))";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse octal escape quantified" {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "\\60+";
+    const expected: []const u8 = "(quantifier :min 1 :max null (literal '0'))";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse escaped backslash in concatenation" {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "a\\\\b";
+
+    const expected: []const u8 = "(concat (concat (literal 'a') (literal 'escaped')) (literal 'b'))";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse escapes within quantified alternation group" {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "(a\\?|b\\*)c";
+    const expected: []const u8 = "(concat (group (alternation (concat (literal 'a') (literal '?')) (concat (literal 'b') (literal '*')))) (literal 'c'))";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse escaped character with interval quantifier" {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "\\x2A{2,3}";
+    const expected: []const u8 = "(quantifier :min 2 :max 3 (literal '*'))";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse max octal escape followed by literal digit" {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "\\1014";
+    const expected: []const u8 = "(concat (literal 'A') (literal '4'))";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse escaped brackets and braces" {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "\\[a\\{b\\}\\]";
+
+    const expected: []const u8 = "(concat (concat (literal '[') (concat (literal 'a') (literal '{'))) (concat (literal 'b') (concat (literal '}') (literal ']'))))";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse multiple mixed escapes concatenated" {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "\\t\\x41\\\\\\(\\n";
+
+    const expected: []const u8 = "(concat (literal 'tab') (concat (literal 'A') (concat (literal 'escaped') (concat (literal '(') (literal 'newline')))))";
     try expectAstSformExact(allocator, pattern, expected);
 }

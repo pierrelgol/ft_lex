@@ -113,7 +113,7 @@ pub const Ast = struct {
                         '\'' => try writer.writeAll("squote"),
                         '\n' => try writer.writeAll("newline"),
                         '\r' => try writer.writeAll("carriage"),
-                        '\t' => try writer.writeAll("tab'"),
+                        '\t' => try writer.writeAll("tab"),
                         else => try writer.print("{c}", .{lit}),
                     }
                     try writer.writeAll("')");
