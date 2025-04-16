@@ -25,8 +25,8 @@ pub const Parser = struct {
 
     pub fn init(gpa: Allocator, pattern: []const u8) Parser {
         var lexer: Lexer = .init(pattern);
-        const start = lexer.eatAnchorStart();
         const end = lexer.eatAnchorEnd();
+        const start = lexer.eatAnchorStart();
         const initial_token = lexer.next();
         return .{
             .lexer = lexer,
@@ -437,7 +437,16 @@ pub const Parser = struct {
             self.eats(1);
         }
 
-        if (self.currLiteral() == ']' or self.currLiteral() == '-') {
+        if (negated and self.currLiteral() == ']' and self.peekLiteral() == 0x00) {
+            self.eats(1);
+            charset.set('^');
+            return self.createNode(.{ .class = .{
+                .negated = false,
+                .charset = charset,
+            } });
+        }
+
+        if (self.currLiteral() == ']' or self.currLiteral() == '-' and self.peekLiteral() != 0x00) {
             charset.set(self.nextLiteral());
         }
 
@@ -1337,8 +1346,6 @@ test "parse slash inside quoted string" {
     try expectAstSformExact(allocator, pattern, expected);
 }
 
-// NEW
-
 test "parse character class empty" {
     const allocator = std.testing.allocator;
     var parser = Parser.init(allocator, "[]");
@@ -1354,7 +1361,6 @@ test "parse multiple trailing contexts error" {
     try std.testing.expectError(Parser.ParseError.SyntaxError, parser.parse());
 }
 
-// TODO
 test "parse error unclosed parenthesis open" {
     const allocator = std.testing.allocator;
     var parser = Parser.init(allocator, "(a");
@@ -1635,4 +1641,178 @@ test "parse definition nested" {
 
     const expected: []const u8 = "(quantifier :min 1 :max null (group (concat (concat (literal 'a') (group (quoted b))) (literal 'c'))))";
     try expectAstDefinitionSformExact(allocator, &substitutions, pattern, expected);
+}
+
+test "parse character class caret only" {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "[^]";
+    const expected: []const u8 = "(class :negated #f :count 1)";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse character class negated hyphen" {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "[^-]";
+    const expected: []const u8 = "(class :negated #t :count 1)";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse character class posix inside range invalid" {
+    const allocator = std.testing.allocator;
+
+    const expected: []const u8 = "(class :negated #f :count 13)";
+    try expectAstSformExact(allocator, "[a-[:digit:]]", expected);
+}
+
+test "parse adjacent quantifiers error" {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "a??";
+    const expected: []const u8 = "(quantifier :min 0 :max 1 (quantifier :min 0 :max 1 (literal 'a')))";
+    try expectAstSformExact(allocator, pattern, expected);
+
+    const pattern2: []const u8 = "a+*";
+    const expected2: []const u8 = "(quantifier :min 0 :max null (quantifier :min 1 :max null (literal 'a')))";
+    try expectAstSformExact(allocator, pattern2, expected2);
+}
+
+test "parse quantifier on start anchor error" {
+    const allocator = std.testing.allocator;
+
+    var parser = Parser.init(allocator, "^?");
+    defer parser.deinit();
+
+    try std.testing.expectError(Parser.ParseError.SyntaxError, parser.parse());
+}
+
+test "parse quantifier on end anchor error" {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "a$?";
+    const expected: []const u8 = "(concat (literal 'a') (quantifier :min 0 :max 1 (literal '$')))";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse empty alternative start error" {
+    const allocator = std.testing.allocator;
+    var parser = Parser.init(allocator, "|b");
+    defer parser.deinit();
+
+    try std.testing.expectError(Parser.ParseError.SyntaxError, parser.parse());
+}
+
+test "parse empty alternative end error" {
+    const allocator = std.testing.allocator;
+    var parser = Parser.init(allocator, "a|");
+    defer parser.deinit();
+
+    try std.testing.expectError(Parser.ParseError.UnexpectedEOF, parser.parse());
+}
+
+test "parse empty alternative middle error" {
+    const allocator = std.testing.allocator;
+    var parser = Parser.init(allocator, "a||b");
+    defer parser.deinit();
+
+    try std.testing.expectError(Parser.ParseError.SyntaxError, parser.parse());
+}
+
+test "parse alternation with anchors" {
+    const allocator = std.testing.allocator;
+
+    const pattern: []const u8 = "^a|b$";
+
+    var parser = Parser.init(allocator, pattern);
+    defer parser.deinit();
+    try std.testing.expectError(Parser.ParseError.SyntaxError, parser.parse());
+
+    const pattern_start: []const u8 = "^a|b";
+    const expected_start: []const u8 = "(start_with (alternation (literal 'a') (literal 'b')))";
+    try expectAstSformExact(allocator, pattern_start, expected_start);
+
+    const pattern_end: []const u8 = "a|b$";
+    const expected_end: []const u8 = "(ends_with (alternation (literal 'a') (literal 'b')))";
+    try expectAstSformExact(allocator, pattern_end, expected_end);
+}
+
+test "parse trailing context complex quantifiers" {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "a?/b*";
+
+    const expected: []const u8 = "(trailing (quantifier :min 0 :max 1 (literal 'a')) (quantifier :min 0 :max null (literal 'b')))";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse trailing context with definition" {
+    const allocator = std.testing.allocator;
+    var substitutions = SubstitutionMap.init(allocator);
+    defer substitutions.deinit();
+
+    var parser = Parser.init(allocator, "[0-9]");
+    defer parser.deinit();
+    const digit_def = try parser.parse();
+    if (digit_def.root) |node| {
+        try substitutions.put("DIGIT", node);
+    } else return error.TestUnexpectedParsingFailure;
+
+    const pattern: []const u8 = "a/{DIGIT}+";
+
+    const expected: []const u8 = "(trailing (literal 'a') (quantifier :min 1 :max null (group (class :negated #f :count 10))))";
+    try expectAstDefinitionSformExact(allocator, &substitutions, pattern, expected);
+}
+
+test "parse definition yielding complex structure" {
+    const allocator = std.testing.allocator;
+    var substitutions = SubstitutionMap.init(allocator);
+    defer substitutions.deinit();
+
+    var parser = Parser.init(allocator, "a|b");
+    defer parser.deinit();
+    const alt_def = try parser.parse();
+    if (alt_def.root) |node| {
+        try substitutions.put("ALT", node);
+    } else return error.TestUnexpectedParsingFailure;
+
+    const pattern: []const u8 = "{ALT}*";
+    const expected: []const u8 = "(quantifier :min 0 :max null (group (alternation (literal 'a') (literal 'b'))))";
+    try expectAstDefinitionSformExact(allocator, &substitutions, pattern, expected);
+
+    const pattern2: []const u8 = "c{ALT}d";
+    const expected2: []const u8 = "(concat (concat (literal 'c') (group (alternation (literal 'a') (literal 'b')))) (literal 'd'))";
+    try expectAstDefinitionSformExact(allocator, &substitutions, pattern2, expected2);
+}
+
+test "parse anchor empty pattern start" {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "^";
+    const expected: []const u8 = "null";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse anchor empty pattern end" {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "$";
+    const expected: []const u8 = "null";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse error mismatched delimiters" {
+    const allocator = std.testing.allocator;
+    var parser = Parser.init(allocator, "([a-z)}");
+    defer parser.deinit();
+
+    try std.testing.expectError(Parser.ParseError.UnclosedBracket, parser.parse());
+}
+
+test "parse unknown escape sequence" {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "\\z";
+    const expected: []const u8 = "(literal 'z')";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse error syntax in interval quantifier" {
+    const allocator = std.testing.allocator;
+    var parser = Parser.init(allocator, "a{1,b}");
+    defer parser.deinit();
+
+    try std.testing.expectError(Parser.ParseError.SyntaxError, parser.parse());
 }
