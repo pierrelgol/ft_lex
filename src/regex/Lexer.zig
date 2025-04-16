@@ -20,6 +20,36 @@ pub const Lexer = struct {
         }
     }
 
+    pub fn first(self: *Lexer) Token {
+        const pos = self.pos;
+        self.pos = 0;
+        defer self.pos = pos;
+        return self.tokenize();
+    }
+
+    pub fn last(self: *Lexer) Token {
+        const pos = self.pos;
+        self.pos = self.pattern.len -| 1;
+        defer self.pos = pos;
+        return self.tokenize();
+    }
+
+    pub fn eatAnchorStart(self: *Lexer) bool {
+        if (self.first().kind() == .literal and self.first().literal == '^') {
+            self.forward();
+            return true;
+        }
+        return false;
+    }
+
+    pub fn eatAnchorEnd(self: *Lexer) bool {
+        if (self.last().kind() == .literal and self.last().literal == '$') {
+            self.pattern.len -|= 1;
+            return true;
+        }
+        return false;
+    }
+
     pub fn backward(self: *Lexer) void {
         if (self.pos != 0) {
             self.pos -= 1;
@@ -74,6 +104,7 @@ pub const Lexer = struct {
             '}' => Token.init(.right_brace, {}),
             ']' => Token.init(.right_bracket, {}),
             ')' => Token.init(.right_parenthesis, {}),
+            '/' => Token.init(.slash, {}),
             else => Token.init(.literal, c),
         };
     }

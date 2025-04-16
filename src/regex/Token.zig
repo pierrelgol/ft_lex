@@ -22,6 +22,7 @@ pub const Token = union(Kind) {
     right_brace: void,
     right_bracket: void,
     right_parenthesis: void,
+    slash: void,
 
     pub fn init(comptime k: Kind, init_expr: anytype) Token {
         return @unionInit(Token, @tagName(k), init_expr);
@@ -78,6 +79,7 @@ pub const Token = union(Kind) {
         right_brace,
         right_bracket,
         right_parenthesis,
+        slash,
 
         pub fn toU8(self: Kind) ?u8 {
             return switch (self) {
@@ -101,6 +103,7 @@ pub const Token = union(Kind) {
                 .right_brace => '}',
                 .right_bracket => ']',
                 .right_parenthesis => ')',
+                .slash => '/',
                 else => null,
             };
         }

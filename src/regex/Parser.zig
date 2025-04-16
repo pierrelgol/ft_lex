@@ -18,15 +18,21 @@ pub const Parser = struct {
     lexer: Lexer,
     token: Token,
     ast: Ast,
+    start_with: bool = false,
+    end_with: bool = false,
     substitutions: ?*SubstitutionMap,
 
     pub fn init(gpa: Allocator, pattern: []const u8) Parser {
         var lexer: Lexer = .init(pattern);
+        const start = lexer.eatAnchorStart();
+        const end = lexer.eatAnchorEnd();
         const initial_token = lexer.next();
         return .{
             .lexer = lexer,
             .token = initial_token,
             .ast = Ast.init(gpa),
+            .start_with = start,
+            .end_with = end,
             .substitutions = null,
         };
     }
@@ -108,7 +114,18 @@ pub const Parser = struct {
         if (self.token.kind() == .eof) {
             self.ast.root = null;
         } else {
-            self.ast.root = try self.parseExpression(.none);
+            if (self.start_with and self.end_with) {
+                return error.SyntaxError;
+            }
+            if (self.start_with) {
+                const expr = try self.parseExpression(.none);
+                self.ast.root = try self.createNode(.{ .start_with = expr });
+            } else if (self.end_with) {
+                const expr = try self.parseExpression(.none);
+                self.ast.root = try self.createNode(.{ .ends_with = expr });
+            } else {
+                self.ast.root = try self.parseExpression(.none);
+            }
         }
         return self.ast;
     }
@@ -136,9 +153,7 @@ pub const Parser = struct {
             .double_quote => self.nudQuote(),
             .dot => self.nudDot(),
             .eof => error.UnexpectedEOF,
-            else => {
-                return error.NudNotImplemented;
-            },
+            else => error.SyntaxError,
         };
     }
 
@@ -153,6 +168,7 @@ pub const Parser = struct {
             .left_bracket => self.ledImplicitConcat(left),
             .backslash => self.ledImplicitConcat(left),
             .asterisk => self.ledZeroOrMore(left),
+            .slash => self.ledTrailingContext(left),
             .left_brace => result: {
                 if (isIdentifierStart(self.peekLiteral())) {
                     break :result self.ledImplicitConcat(left);
@@ -163,8 +179,19 @@ pub const Parser = struct {
             .alternation => self.ledAlternation(left),
             .double_quote => try self.ledImplicitConcat(left),
             .eof => error.UnexpectedEOF,
-            else => error.LedNotImplemented,
+            else => error.SyntaxError,
         };
+    }
+
+    fn ledTrailingContext(self: *Parser, left: *Node) ParseError!*Node {
+        assert(self.token.kind() == .slash);
+        self.eats(1);
+        return self.createNode(.{
+            .trailing = .{
+                .lhs = left,
+                .rhs = try self.parseExpression(.trailing),
+            },
+        });
     }
 
     fn isIdentifierStart(c: u8) bool {
@@ -617,6 +644,7 @@ pub const Parser = struct {
             .right_bracket => @intFromEnum(BindingPower.none),
             .backslash => @intFromEnum(BindingPower.escaped),
             .double_quote => @intFromEnum(BindingPower.quoting),
+            .slash => @intFromEnum(BindingPower.trailing),
             .eof => @intFromEnum(BindingPower.none),
             .dot => @intFromEnum(BindingPower.class),
             else => @intFromEnum(BindingPower.none),
@@ -627,16 +655,17 @@ pub const Parser = struct {
 
     pub const BindingPower = enum(u8) {
         none = 0,
-        alternation = 1,
-        interval_expression = 2,
-        concatenation = 3,
-        quantifier = 4,
-        definition = 5,
-        grouping = 6,
-        quoting = 7,
-        class = 8,
-        escaped = 9,
-        bracket = 10,
+        trailing = 1,
+        alternation = 2,
+        interval_expression = 3,
+        concatenation = 4,
+        quantifier = 5,
+        definition = 6,
+        grouping = 7,
+        quoting = 8,
+        class = 9,
+        escaped = 10,
+        bracket = 11,
     };
 
     pub const PosixClass = enum {
@@ -1195,4 +1224,14 @@ test "parse definition complex twice" {
     const pattern: []const u8 = "{DIGIT}{1,5}{DIGIT}?";
     const expected: []const u8 = "(concat (quantifier :min 1 :max 5 (group (class :negated #f :count 10))) (quantifier :min 0 :max 1 (group (class :negated #f :count 10))))";
     try expectAstDefinitionSformExact(allocator, &substitutions, pattern, expected);
+}
+
+test "parse anchor start" {
+    const allocator = std.testing.allocator;
+    try expectAstSformExact(allocator, "^a", "(start_with (literal 'a'))");
+}
+
+test "parse anchor end" {
+    const allocator = std.testing.allocator;
+    try expectAstSformExact(allocator, "a$", "(ends_with (literal 'a'))");
 }
