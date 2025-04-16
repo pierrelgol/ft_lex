@@ -12,11 +12,13 @@ const Lexer = @import("Lexer.zig").Lexer;
 const Token = @import("Token.zig").Token;
 
 const Charset = std.bit_set.StaticBitSet(256);
+const SubstitutionMap = std.StringArrayHashMap(*Node);
 
 pub const Parser = struct {
     lexer: Lexer,
     token: Token,
     ast: Ast,
+    substitutions: ?*SubstitutionMap,
 
     pub fn init(gpa: Allocator, pattern: []const u8) Parser {
         var lexer: Lexer = .init(pattern);
@@ -25,6 +27,18 @@ pub const Parser = struct {
             .lexer = lexer,
             .token = initial_token,
             .ast = Ast.init(gpa),
+            .substitutions = null,
+        };
+    }
+
+    pub fn initSubsitutions(gpa: Allocator, pattern: []const u8, substitutions: ?*SubstitutionMap) Parser {
+        var lexer: Lexer = .init(pattern);
+        const initial_token = lexer.next();
+        return .{
+            .lexer = lexer,
+            .token = initial_token,
+            .ast = Ast.init(gpa),
+            .substitutions = substitutions,
         };
     }
 
@@ -46,6 +60,7 @@ pub const Parser = struct {
         EmptyGroup,
         EmptyClass,
         SyntaxError,
+        MissingDefinition,
     } || Allocator.Error;
 
     fn eats(self: *Parser, n: usize) void {
@@ -117,6 +132,7 @@ pub const Parser = struct {
             .left_parenthesis => self.nudGroup(),
             .backslash => self.nudEscaped(),
             .left_bracket => self.nudClass(),
+            .left_brace => self.nudDefinition(),
             .double_quote => self.nudQuote(),
             .dot => self.nudDot(),
             .eof => error.UnexpectedEOF,
@@ -137,12 +153,90 @@ pub const Parser = struct {
             .left_bracket => self.ledImplicitConcat(left),
             .backslash => self.ledImplicitConcat(left),
             .asterisk => self.ledZeroOrMore(left),
-            .left_brace => self.ledIntervalExpression(left),
+            .left_brace => result: {
+                if (isIdentifierStart(self.peekLiteral())) {
+                    break :result self.ledImplicitConcat(left);
+                } else {
+                    break :result self.ledIntervalExpression(left);
+                }
+            },
             .alternation => self.ledAlternation(left),
             .double_quote => try self.ledImplicitConcat(left),
             .eof => error.UnexpectedEOF,
             else => error.LedNotImplemented,
         };
+    }
+
+    fn isIdentifierStart(c: u8) bool {
+        return std.ascii.isAlphabetic(c) or c == '_';
+    }
+
+    fn isIdentifierInner(c: u8) bool {
+        return std.ascii.isAlphanumeric(c) or c == '_';
+    }
+
+    fn nudDefinition(self: *Parser) ParseError!*Node {
+        assert(self.token.kind() == .left_brace);
+        self.eats(1);
+
+        if (!isIdentifierStart(self.currLiteral())) {
+            return error.SyntaxError;
+        }
+
+        var buffer = std.BoundedArray(u8, 256).init(0) catch unreachable;
+        while (true) {
+            if (self.currLiteral() == 0x00) {
+                return error.UnclosedIdentifier;
+            }
+
+            if (self.currLiteral() == '}') {
+                break;
+            }
+
+            if (!isIdentifierInner(self.currLiteral())) {
+                return error.SyntaxError;
+            }
+
+            buffer.appendAssumeCapacity(self.nextLiteral());
+        }
+        assert(self.token.kind() == .right_brace);
+        self.eats(1);
+
+        const key = buffer.constSlice();
+        if (self.substitutions) |sub| {
+            const value = sub.get(key) orelse return error.MissingDefinition;
+            return self.createNode(.{
+                .group = try self.ast.cloneNode(value),
+            });
+        } else {
+            return error.MissingDefinition;
+        }
+    }
+
+    fn nudQuote(self: *Parser) ParseError!*Node {
+        assert(self.token.kind() == .double_quote);
+        self.eats(1);
+
+        var buffer = std.BoundedArray(u8, 256).init(0) catch unreachable;
+        while (true) {
+            if (self.currLiteral() == '"') {
+                break;
+            }
+
+            if (self.currLiteral() == 0x00) {
+                return error.UnclosedQuote;
+            }
+            buffer.appendAssumeCapacity(self.nextLiteral());
+        }
+        assert(self.token.kind() == .double_quote);
+        self.eats(1);
+        const allocator = self.ast.scratchAllocator();
+        const string = try allocator.dupe(u8, buffer.constSlice());
+        return self.createNode(.{
+            .quoted = .{
+                .string = string,
+            },
+        });
     }
 
     fn nudLiteral(self: *Parser) ParseError!*Node {
@@ -179,32 +273,6 @@ pub const Parser = struct {
                     value.setValue('\n', false);
                     break :charset value;
                 },
-            },
-        });
-    }
-
-    fn nudQuote(self: *Parser) ParseError!*Node {
-        assert(self.token.kind() == .double_quote);
-        self.eats(1);
-
-        var buffer = std.BoundedArray(u8, 256).init(0) catch unreachable;
-        while (true) {
-            if (self.currLiteral() == '"') {
-                break;
-            }
-
-            if (self.currLiteral() == 0x00) {
-                return error.UnclosedQuote;
-            }
-            buffer.appendAssumeCapacity(self.nextLiteral());
-        }
-        assert(self.token.kind() == .double_quote);
-        self.eats(1);
-        const allocator = self.ast.scratchAllocator();
-        const string = try allocator.dupe(u8, buffer.constSlice());
-        return self.createNode(.{
-            .quoted = .{
-                .string = string,
             },
         });
     }
@@ -649,6 +717,24 @@ fn expectAstSformExact(gpa: Allocator, pattern: []const u8, expected: []const u8
     try std.testing.expectEqualStrings(expected, actual);
 }
 
+fn expectAstDefinitionSformExact(gpa: Allocator, substitutions: *SubstitutionMap, pattern: []const u8, expected: []const u8) !void {
+    var parser: Parser = .initSubsitutions(gpa, pattern, substitutions);
+    defer parser.deinit();
+
+    const ast = parser.parse() catch |err| {
+        std.debug.print("Parsing failed for pattern \"{s}\": {s}\n", .{ pattern, @errorName(err) });
+
+        return error.TestUnexpectedParsingFailure;
+    };
+    const actual = std.fmt.allocPrint(gpa, "{any}", .{ast}) catch |err| {
+        std.debug.print("Formatting failed for pattern \"{s}\": {s}\n", .{ pattern, @errorName(err) });
+        return error.TestUnexpectedFormattingFailure;
+    };
+    defer gpa.free(actual);
+
+    try std.testing.expectEqualStrings(expected, actual);
+}
+
 test "parse single literal" {
     const allocator = std.testing.allocator;
     const pattern: []const u8 = "a";
@@ -1052,4 +1138,61 @@ test "parse concatenation with quoted string" {
     const pattern: []const u8 = "a\"b*c\"d";
     const expected: []const u8 = "(concat (concat (literal 'a') (quoted b*c)) (literal 'd'))";
     try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse definition simple" {
+    const allocator = std.testing.allocator;
+
+    var substitutions = SubstitutionMap.init(allocator);
+    defer substitutions.deinit();
+
+    var parser = Parser.init(allocator, "[0-9]");
+    defer parser.deinit();
+
+    const digit_definiton = try parser.parse();
+    if (digit_definiton.root) |node| {
+        try substitutions.put("DIGIT", node);
+    }
+
+    const pattern: []const u8 = "{DIGIT}+";
+    const expected: []const u8 = "(quantifier :min 1 :max null (group (class :negated #f :count 10)))";
+    try expectAstDefinitionSformExact(allocator, &substitutions, pattern, expected);
+}
+
+test "parse definition complex" {
+    const allocator = std.testing.allocator;
+
+    var substitutions = SubstitutionMap.init(allocator);
+    defer substitutions.deinit();
+
+    var parser = Parser.init(allocator, "[0-9]");
+    defer parser.deinit();
+
+    const digit_definiton = try parser.parse();
+    if (digit_definiton.root) |node| {
+        try substitutions.put("DIGIT", node);
+    }
+
+    const pattern: []const u8 = "{DIGIT}{1,5}";
+    const expected: []const u8 = "(quantifier :min 1 :max 5 (group (class :negated #f :count 10)))";
+    try expectAstDefinitionSformExact(allocator, &substitutions, pattern, expected);
+}
+
+test "parse definition complex twice" {
+    const allocator = std.testing.allocator;
+
+    var substitutions = SubstitutionMap.init(allocator);
+    defer substitutions.deinit();
+
+    var parser = Parser.init(allocator, "[0-9]");
+    defer parser.deinit();
+
+    const digit_definiton = try parser.parse();
+    if (digit_definiton.root) |node| {
+        try substitutions.put("DIGIT", node);
+    }
+
+    const pattern: []const u8 = "{DIGIT}{1,5}{DIGIT}?";
+    const expected: []const u8 = "(concat (quantifier :min 1 :max 5 (group (class :negated #f :count 10))) (quantifier :min 0 :max 1 (group (class :negated #f :count 10))))";
+    try expectAstDefinitionSformExact(allocator, &substitutions, pattern, expected);
 }

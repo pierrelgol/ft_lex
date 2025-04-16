@@ -32,6 +32,83 @@ pub const Ast = struct {
         return self.pool.create();
     }
 
+    pub fn cloneNode(self: *Ast, original: *const Node) !*Node {
+        const new_node = try self.createNode();
+        switch (original.*) {
+            .literal => |orig_lit| {
+                new_node.* = .{ .literal = orig_lit };
+            },
+
+            .class => |orig_class| {
+                new_node.* = .{ .class = orig_class };
+            },
+
+            .quoted => |orig_quoted| {
+                const cloned_string = try self.scratchAllocator().dupe(u8, orig_quoted.string);
+                new_node.* = .{ .quoted = .{ .string = cloned_string } };
+            },
+
+            .start_with => |orig_child_ptr| {
+                const cloned_child = try self.cloneNode(orig_child_ptr);
+                new_node.* = .{ .start_with = cloned_child };
+            },
+            .ends_with => |orig_child_ptr| {
+                const cloned_child = try self.cloneNode(orig_child_ptr);
+                new_node.* = .{ .ends_with = cloned_child };
+            },
+            .group => |orig_child_ptr| {
+                const cloned_child = try self.cloneNode(orig_child_ptr);
+                new_node.* = .{ .group = cloned_child };
+            },
+            .quantifier => |orig_quant| {
+                const cloned_lhs = try self.cloneNode(orig_quant.lhs);
+
+                new_node.* = .{
+                    .quantifier = .{
+                        .min = orig_quant.min,
+                        .max = orig_quant.max,
+                        .lhs = cloned_lhs,
+                    },
+                };
+            },
+
+            .alternation => |orig_alt| {
+                const cloned_lhs = try self.cloneNode(orig_alt.lhs);
+                const cloned_rhs = try self.cloneNode(orig_alt.rhs);
+                new_node.* = .{ .alternation = .{
+                    .lhs = cloned_lhs,
+                    .rhs = cloned_rhs,
+                } };
+            },
+            .concat => |orig_concat| {
+                const cloned_lhs = try self.cloneNode(orig_concat.lhs);
+                const cloned_rhs = try self.cloneNode(orig_concat.rhs);
+                new_node.* = .{ .concat = .{
+                    .lhs = cloned_lhs,
+                    .rhs = cloned_rhs,
+                } };
+            },
+            .trailing => |orig_trail| {
+                const cloned_lhs = try self.cloneNode(orig_trail.lhs);
+                const cloned_rhs = try self.cloneNode(orig_trail.rhs);
+                new_node.* = .{ .trailing = .{
+                    .lhs = cloned_lhs,
+                    .rhs = cloned_rhs,
+                } };
+            },
+        }
+
+        return new_node;
+    }
+
+    pub fn cloneNullableNode(self: *Ast, original: ?*const Node) !?*Node {
+        if (original) |orig_node| {
+            return try self.cloneNode(orig_node);
+        } else {
+            return null;
+        }
+    }
+
     pub const Node = union(Kind) {
         alternation: struct {
             lhs: *Node,
@@ -45,10 +122,6 @@ pub const Ast = struct {
         },
         concat: struct {
             lhs: *Node,
-            rhs: *Node,
-        },
-        condition: struct {
-            cond: [64:0]u8,
             rhs: *Node,
         },
         group: *Node,
@@ -72,7 +145,6 @@ pub const Ast = struct {
             ends_with,
             class,
             concat,
-            condition,
             group,
             literal,
             quantifier,
@@ -102,10 +174,6 @@ pub const Ast = struct {
                 },
                 .concat => |cat| {
                     try writer.print("(concat {any} {any})", .{ cat.lhs, cat.rhs });
-                },
-                .condition => |cond| {
-                    const cond_name = mem.sliceTo(cond.cond[0..], 0);
-                    try writer.print("(condition :name \"{s}\" {any})", .{ cond_name, cond.rhs });
                 },
                 .group => |grp| {
                     try writer.print("(group {any})", .{grp});
