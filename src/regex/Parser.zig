@@ -1235,3 +1235,91 @@ test "parse anchor end" {
     const allocator = std.testing.allocator;
     try expectAstSformExact(allocator, "a$", "(ends_with (literal 'a'))");
 }
+
+const testing = std.testing;
+
+test "parse trailing context simple" {
+    const allocator = testing.allocator;
+    const pattern = "a/b";
+
+    const expected = "(trailing (literal 'a') (literal 'b'))";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse trailing context complex main expression" {
+    const allocator = testing.allocator;
+    const pattern = "a+b?/(cd)*";
+
+    const expected = "(trailing (concat (quantifier :min 1 :max null (literal 'a')) (quantifier :min 0 :max 1 (literal 'b'))) (quantifier :min 0 :max null (group (concat (literal 'c') (literal 'd')))))";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse trailing context complex context expression" {
+    const allocator = testing.allocator;
+    const pattern = "[^0-9]/(\\t|\\n)+";
+
+    const expected = "(trailing (class :negated #t :count 10) (quantifier :min 1 :max null (group (alternation (literal 'tab') (literal 'newline')))))";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse trailing context precedence vs alternation (left)" {
+    const allocator = testing.allocator;
+    const pattern = "a|b/c";
+
+    const expected = "(trailing (alternation (literal 'a') (literal 'b')) (literal 'c'))";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse trailing context precedence vs alternation (right)" {
+    const allocator = testing.allocator;
+    const pattern = "a/b|c";
+
+    const expected = "(trailing (literal 'a') (alternation (literal 'b') (literal 'c')))";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse trailing context precedence vs alternation (both)" {
+    const allocator = testing.allocator;
+    const pattern = "a|b/c|d";
+
+    const expected = "(trailing (alternation (literal 'a') (literal 'b')) (alternation (literal 'c') (literal 'd')))";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse trailing context with start anchor" {
+    const allocator = testing.allocator;
+    const pattern = "^a+/b";
+
+    const expected = "(start_with (trailing (quantifier :min 1 :max null (literal 'a')) (literal 'b')))";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse trailing context with end anchor" {
+    const allocator = testing.allocator;
+    const pattern = "a/b+$";
+
+    const expected = "(ends_with (trailing (literal 'a') (quantifier :min 1 :max null (literal 'b'))))";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse escaped slash (no trailing context)" {
+    const allocator = testing.allocator;
+    const pattern = "a\\/b";
+    const expected = "(concat (concat (literal 'a') (literal '/')) (literal 'b'))";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse slash inside character class" {
+    const allocator = testing.allocator;
+    const pattern = "[a/z]";
+
+    const expected = "(class :negated #f :count 3)";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse slash inside quoted string" {
+    const allocator = testing.allocator;
+    const pattern = "\"a/b\"";
+    const expected = "(quoted a/b)";
+    try expectAstSformExact(allocator, pattern, expected);
+}
