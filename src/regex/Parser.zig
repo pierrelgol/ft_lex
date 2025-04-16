@@ -4,6 +4,7 @@ const math = std.math;
 const Order = math.Order;
 const assert = std.debug.assert;
 const Allocator = mem.Allocator;
+const Range = std.bit_set.Range;
 
 const Ast = @import("Ast.zig").Ast;
 const Node = Ast.Node;
@@ -43,6 +44,7 @@ pub const Parser = struct {
         UnclosedCondition,
         UnclosedIdentifier,
         EmptyGroup,
+        EmptyClass,
         SyntaxError,
     } || Allocator.Error;
 
@@ -53,21 +55,14 @@ pub const Parser = struct {
         }
     }
 
-    fn eatsLiteral(self: *Parser, n: usize) void {
-        assert(n > 0);
-        for (0..n) |_| {
-            _ = self.nextLiteral();
-        }
-    }
-
     fn next(self: *Parser) Token {
         const prev_token = self.token;
         self.token = self.lexer.next();
         return prev_token;
     }
 
-    fn nextLiteral(self: *Parser) Token {
-        const prev_token = self.token.toLiteral();
+    fn nextLiteral(self: *Parser) u8 {
+        const prev_token = self.token.toU8();
         self.token = self.lexer.next();
         return prev_token;
     }
@@ -76,14 +71,16 @@ pub const Parser = struct {
         return self.lexer.peek();
     }
 
-    fn peekLiteral(self: *Parser) Token {
-        var token = self.lexer.peek();
-        token = token.toLiteral();
-        return token;
+    fn peekLiteral(self: *Parser) u8 {
+        return self.lexer.peek().toU8();
     }
 
     fn curr(self: *Parser) Token {
         return self.token;
+    }
+
+    fn currLiteral(self: *Parser) u8 {
+        return self.token.toU8();
     }
 
     fn createNode(self: *Parser, init_expr: Node) Allocator.Error!*Node {
@@ -118,9 +115,12 @@ pub const Parser = struct {
         return switch (current_token.kind()) {
             .literal => self.nudLiteral(),
             .left_parenthesis => self.nudGroup(),
+            .left_bracket => self.nudClass(),
             .dot => self.nudDot(),
             .eof => error.UnexpectedEOF,
-            else => error.NudNotImplemented,
+            else => {
+                return error.NudNotImplemented;
+            },
         };
     }
 
@@ -175,6 +175,181 @@ pub const Parser = struct {
                     value.setValue('\n', false);
                     break :charset value;
                 },
+            },
+        });
+    }
+
+    fn parsePosixClass(self: *Parser) ParseError!Charset {
+        assert(self.token.kind() == .left_bracket);
+        self.eats(1);
+        assert(self.token.kind() == .colon);
+        self.eats(1);
+
+        var buffer = std.BoundedArray(u8, 256).init(0) catch unreachable;
+        while (true) {
+            if (self.currLiteral() == ':' and self.peekLiteral() == ']') {
+                self.eats(2);
+                break;
+            }
+            buffer.appendAssumeCapacity(self.currLiteral());
+            self.eats(1);
+        }
+        const class = std.meta.stringToEnum(PosixClass, buffer.constSlice()) orelse return error.SyntaxError;
+        return class.toCharset();
+    }
+
+    fn parseHexaSequence(self: *Parser) ParseError!Token {
+        assert((self.currLiteral() == 'x' or self.currLiteral() == 'X'));
+        self.eats(1);
+
+        var buffer = std.BoundedArray(u8, 3).init(0) catch unreachable;
+        for (0..2) |_| {
+            const c = self.currLiteral();
+            if (std.ascii.isHex(c)) {
+                buffer.appendAssumeCapacity(self.nextLiteral());
+            } else {
+                break;
+            }
+        }
+        const value: u8 = std.fmt.parseUnsigned(u8, buffer.constSlice(), 16) catch {
+            return error.SyntaxError;
+        };
+        return Token.init(.literal, value);
+    }
+
+    fn parseOctalSequence(self: *Parser, len: usize) ParseError!Token {
+        assert((self.currLiteral() >= '0' and self.currLiteral() <= '7') or (self.currLiteral() == 'o'));
+
+        if (len == 2) {
+            self.eats(1);
+        }
+
+        var buffer = std.BoundedArray(u8, 3).init(0) catch unreachable;
+        for (0..len) |_| {
+            const c = self.currLiteral();
+            if (c >= '0' and c <= '7') {
+                buffer.appendAssumeCapacity(self.nextLiteral());
+            } else {
+                break;
+            }
+        }
+
+        const value: u8 = std.fmt.parseUnsigned(u8, buffer.constSlice(), 8) catch {
+            return error.SyntaxError;
+        };
+
+        return Token.init(.literal, value);
+    }
+
+    fn parseEscapedSequence(self: *Parser) ParseError!Token {
+        assert(self.token.kind() == .backslash);
+        self.eats(1);
+        const token = self.currLiteral();
+        return switch (token) {
+            0x00 => error.UnexpectedEOF,
+            'n' => tok: {
+                self.eats(1);
+                const esc_token = Token.init(.literal, '\n');
+                break :tok esc_token;
+            },
+            't' => tok: {
+                const esc_token = Token.init(.literal, '\t');
+                self.eats(1);
+                break :tok esc_token;
+            },
+            'r' => tok: {
+                const esc_token = Token.init(.literal, '\r');
+                self.eats(1);
+                break :tok esc_token;
+            },
+            'f' => tok: {
+                const esc_token = Token.init(.literal, std.ascii.control_code.ff);
+                self.eats(1);
+                break :tok esc_token;
+            },
+            'v' => tok: {
+                const esc_token = Token.init(.literal, std.ascii.control_code.vt);
+                self.eats(1);
+                break :tok esc_token;
+            },
+            '0'...'7' => try self.parseOctalSequence(3),
+            'o' => try self.parseOctalSequence(2),
+            'x', 'X' => try self.parseHexaSequence(),
+            else => tok: {
+                const lit_token = Token.init(.literal, token);
+                self.eats(1);
+                break :tok lit_token;
+            },
+        };
+    }
+
+    fn nudClass(self: *Parser) ParseError!*Node {
+        assert(self.token.kind() == .left_bracket);
+        self.eats(1);
+
+        var negated: bool = false;
+        var charset: Charset = .initEmpty();
+
+        if (self.currLiteral() == '^') {
+            negated = true;
+            self.eats(1);
+        }
+
+        if (self.currLiteral() == ']' or self.currLiteral() == '-') {
+            charset.set(self.currLiteral());
+        }
+
+        while (true) {
+            if (self.currLiteral() == 0x00) {
+                return error.UnclosedBracket;
+            }
+
+            if (self.currLiteral() == ']') {
+                break;
+            }
+
+            if (self.currLiteral() == '[' and self.peekLiteral() == ':') {
+                const class = try self.parsePosixClass();
+                charset.setUnion(class);
+                continue;
+            }
+
+            if (self.token.kind() == .backslash) {
+                const escaped = try self.parseEscapedSequence();
+                charset.set(escaped.toU8());
+                continue;
+            }
+
+            if (self.peekLiteral() == '-') {
+                var range: Range = .{
+                    .start = self.currLiteral(),
+                    .end = 0,
+                };
+                self.eats(2);
+                if (self.currLiteral() == ']') {
+                    charset.set(range.start);
+                    charset.set('-');
+                    continue;
+                }
+
+                range.end = self.currLiteral();
+                if (range.end < range.start) {
+                    charset.set(range.start);
+                    charset.set('-');
+                    charset.set(range.end);
+                } else {
+                    charset.setRangeValue(range, true);
+                }
+                continue;
+            }
+            charset.set(self.nextLiteral());
+        }
+        assert(self.currLiteral() == ']');
+        self.eats(1);
+        return self.createNode(.{
+            .class = .{
+                .negated = negated,
+                .charset = charset,
             },
         });
     }
@@ -334,6 +509,7 @@ pub const Parser = struct {
             .right_brace => @intFromEnum(BindingPower.none),
             .left_bracket => @intFromEnum(BindingPower.class),
             .right_bracket => @intFromEnum(BindingPower.none),
+            .eof => @intFromEnum(BindingPower.none),
             .dot => @intFromEnum(BindingPower.class),
             else => @intFromEnum(BindingPower.none),
         };
@@ -354,6 +530,65 @@ pub const Parser = struct {
         escaped = 9,
         bracket = 10,
     };
+
+    pub const PosixClass = enum {
+        upper,
+        lower,
+        alpha,
+        digit,
+        xdigit,
+        alnum,
+        punct,
+        blank,
+        space,
+        cntrl,
+        graph,
+        print,
+
+        pub fn toCharset(class: PosixClass) Charset {
+            const set = switch (class) {
+                .upper => upper_chars,
+                .lower => lower_chars,
+                .alpha => alpha_chars,
+                .digit => digit_chars,
+                .xdigit => xdigit_chars,
+                .alnum => alnum_chars,
+                .punct => punct_chars,
+                .blank => blank_chars,
+                .space => space_chars,
+                .cntrl => cntrl_chars,
+                .graph => graph_chars,
+                .print => print_chars,
+            };
+
+            var charset: Charset = .initEmpty();
+            for (set) |value| {
+                charset.set(value);
+            }
+
+            return charset;
+        }
+    };
+};
+
+const upper_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+const lower_chars = "abcdefghijklmnopqrstuvwxyz";
+const alpha_chars = upper_chars ++ lower_chars;
+const digit_chars = "0123456789";
+const xdigit_chars = digit_chars ++ "abcdef" ++ "ABCDEF";
+const alnum_chars = alpha_chars ++ digit_chars;
+const punct_chars = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~";
+const blank_chars = " \t";
+const space_chars = std.ascii.whitespace ++ "";
+const graph_chars = alnum_chars ++ punct_chars;
+const print_chars = graph_chars ++ " ";
+const cntrl_chars = blk: {
+    var buffer = std.BoundedArray(u8, 33).init(0) catch unreachable;
+    for (0..31) |i| {
+        buffer.appendAssumeCapacity(@intCast(i));
+    }
+    buffer.appendAssumeCapacity(std.ascii.control_code.del);
+    break :blk buffer.constSlice().ptr[0..33] ++ "";
 };
 
 fn expectAstSformExact(gpa: Allocator, pattern: []const u8, expected: []const u8) !void {
@@ -619,138 +854,58 @@ test "parse literal class dot " {
     try expectAstSformExact(allocator, pattern, expected);
 }
 
-// test "parse class simple literals" {
-//     const allocator = std.testing.allocator;
-//     const pattern: []const u8 = "[abc]";
+test "parse class simple literals alpha" {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "[[:alpha:]]";
 
-//     const expected: []const u8 = "(class :negated #f :count 3)";
-//     try expectAstSformExact(allocator, pattern, expected);
-// }
+    const expected: []const u8 = "(class :negated #f :count 52)";
+    try expectAstSformExact(allocator, pattern, expected);
+}
 
-// test "parse class negated simple literals" {
-//     const allocator = std.testing.allocator;
-//     const pattern: []const u8 = "[^abc]";
+test "parse class simple literals alnum" {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "[[:alnum:]]";
 
-//     const expected: []const u8 = "(class :negated #t :count 253)";
-//     try expectAstSformExact(allocator, pattern, expected);
-// }
+    const expected: []const u8 = "(class :negated #f :count 62)";
+    try expectAstSformExact(allocator, pattern, expected);
+}
 
-// test "parse class simple range" {
-//     const allocator = std.testing.allocator;
-//     const pattern: []const u8 = "[a-c]";
+test "parse class simple literals abc" {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "[abc]";
 
-//     const expected: []const u8 = "(class :negated #f :count 3)";
-//     try expectAstSformExact(allocator, pattern, expected);
-// }
+    const expected: []const u8 = "(class :negated #f :count 3)";
+    try expectAstSformExact(allocator, pattern, expected);
+}
 
-// test "parse class multiple ranges" {
-//     const allocator = std.testing.allocator;
-//     const pattern: []const u8 = "[a-zA-Z]";
+test "parse class simple range lowercase" {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "[a-z]";
 
-//     const expected: []const u8 = "(class :negated #f :count 52)";
-//     try expectAstSformExact(allocator, pattern, expected);
-// }
+    const expected: []const u8 = "(class :negated #f :count 26)";
+    try expectAstSformExact(allocator, pattern, expected);
+}
 
-// test "parse class ranges and literals" {
-//     const allocator = std.testing.allocator;
-//     const pattern: []const u8 = "[a-fA-F0-9]";
+test "parse class simple range lowercase, implicit concat" {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "[a-z]a";
 
-//     const expected: []const u8 = "(class :negated #f :count 22)";
-//     try expectAstSformExact(allocator, pattern, expected);
-// }
+    const expected: []const u8 = "(concat (class :negated #f :count 26) (literal 'a'))";
+    try expectAstSformExact(allocator, pattern, expected);
+}
 
-// test "parse class literal hyphen at start" {
-//     const allocator = std.testing.allocator;
-//     const pattern: []const u8 = "[-ab]";
+test "parse class negated literals" {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "[^123]";
 
-//     const expected: []const u8 = "(class :negated #f :count 3)";
-//     try expectAstSformExact(allocator, pattern, expected);
-// }
+    const expected: []const u8 = "(class :negated #t :count 3)";
+    try expectAstSformExact(allocator, pattern, expected);
+}
 
-// test "parse class literal hyphen at end" {
-//     const allocator = std.testing.allocator;
-//     const pattern: []const u8 = "[ab-]";
+test "parse class literal hyphen at end" {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "[a-c-]";
 
-//     const expected: []const u8 = "(class :negated #f :count 3)";
-//     try expectAstSformExact(allocator, pattern, expected);
-// }
-
-// test "parse class literal closing bracket first" {
-//     const allocator = std.testing.allocator;
-//     const pattern: []const u8 = "[]a]";
-
-//     const expected: []const u8 = "(class :negated #f :count 2)";
-//     try expectAstSformExact(allocator, pattern, expected);
-// }
-
-// test "parse class literal caret not first" {
-//     const allocator = std.testing.allocator;
-//     const pattern: []const u8 = "[a^]";
-
-//     const expected: []const u8 = "(class :negated #f :count 2)";
-//     try expectAstSformExact(allocator, pattern, expected);
-// }
-
-// test "parse class escaped special chars" {
-//     const allocator = std.testing.allocator;
-//     const pattern: []const u8 = "[\\-\\]\\^\\\\]";
-
-//     const expected: []const u8 = "(class :negated #f :count 4)";
-//     try expectAstSformExact(allocator, pattern, expected);
-// }
-
-// test "parse class empty" {
-//     const allocator = std.testing.allocator;
-//     const pattern: []const u8 = "[]";
-
-//     const expected: []const u8 = "(class :negated #f :count 0)";
-//     try expectAstSformExact(allocator, pattern, expected);
-// }
-
-// test "parse class negated empty" {
-//     const allocator = std.testing.allocator;
-//     const pattern: []const u8 = "[^]";
-
-//     const expected: []const u8 = "(class :negated #t :count 256)";
-//     try expectAstSformExact(allocator, pattern, expected);
-// }
-
-// test "parse class dot is literal" {
-//     const allocator = std.testing.allocator;
-//     const pattern: []const u8 = "[.a]";
-
-//     const expected: []const u8 = "(class :negated #f :count 2)";
-//     try expectAstSformExact(allocator, pattern, expected);
-// }
-
-// test "parse class mixed range literal no range" {
-//     const allocator = std.testing.allocator;
-//     const pattern: []const u8 = "[a-c-e]";
-
-//     const expected: []const u8 = "(class :negated #f :count 5)";
-//     try expectAstSformExact(allocator, pattern, expected);
-// }
-
-// test "parse class concatenated" {
-//     const allocator = std.testing.allocator;
-//     const pattern: []const u8 = "a[bc]";
-
-//     const expected: []const u8 = "(concat (literal 'a') (class :negated #f :count 2))";
-//     try expectAstSformExact(allocator, pattern, expected);
-// }
-
-// test "parse class quantified" {
-//     const allocator = std.testing.allocator;
-//     const pattern: []const u8 = "[0-9]+";
-
-//     const expected: []const u8 = "(quantifier :min 1 :max null (class :negated #f :count 10))";
-//     try expectAstSformExact(allocator, pattern, expected);
-// }
-
-// test "parse class alternated" {
-//     const allocator = std.testing.allocator;
-//     const pattern: []const u8 = "a|[0-9]";
-
-//     const expected: []const u8 = "(alternation (literal 'a') (class :negated #f :count 10))";
-//     try expectAstSformExact(allocator, pattern, expected);
-// }
+    const expected: []const u8 = "(class :negated #f :count 4)";
+    try expectAstSformExact(allocator, pattern, expected);
+}

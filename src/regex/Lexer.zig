@@ -37,9 +37,9 @@ pub const Lexer = struct {
 
     pub fn peek(self: *Lexer) Token {
         if (self.pos >= self.pattern.len) return Token.init(.eof, {});
-        self.forward();
+        // self.forward();
         const token = self.tokenize();
-        self.backward();
+        // self.backward();
         return token;
     }
 
