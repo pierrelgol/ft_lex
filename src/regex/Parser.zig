@@ -1958,3 +1958,163 @@ test "parse escaped anchor characters" {
     // };
     return error.SkipZigTest;
 }
+
+test "parse character class posix combined with range and literal hyphen" {
+    const allocator = std.testing.allocator;
+
+    const pattern: []const u8 = "[[:digit:]a-f-]";
+    const expected: []const u8 = "(class :negated #f :count 17)";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse character class negated posix class" {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "[^[:space:]]";
+
+    const expected: []const u8 = "(class :negated #t :count 6)";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse character class nested brackets literal" {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "[[abc]]";
+
+    const expected: []const u8 = "(class :negated #f :count 4)";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse escape octal explicit length 2" {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "\\o60";
+    const expected: []const u8 = "(literal '0')";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse escape hex mixed case" {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "\\x4aF";
+    const expected: []const u8 = "(concat (literal 'J') (literal 'F'))";
+    try expectAstSformExact(allocator, pattern, expected);
+
+    const pattern2: []const u8 = "\\xAb";
+    const expected2: []const u8 = "(literal '\xab')";
+    try expectAstSformExact(allocator, pattern2, expected2);
+}
+
+test "parse escaped dot and pipe" {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "a\\.b\\|c";
+    const expected: []const u8 = "(concat (concat (concat (literal 'a') (literal '.')) (concat (literal 'b') (literal '|'))) (literal 'c'))";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse quantifier on posix class" {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "[[:digit:]]?";
+    const expected: []const u8 = "(quantifier :min 0 :max 1 (class :negated #f :count 10))";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse definition name with underscore" {
+    const allocator = std.testing.allocator;
+    var substitutions = SubstitutionMap.init(allocator);
+    defer substitutions.deinit();
+
+    var parser = Parser.init(allocator, "xyz");
+    defer parser.deinit();
+    const def_ast = try parser.parse();
+    if (def_ast.root) |node| {
+        try substitutions.put("_MY_DEF", node);
+    } else return error.TestUnexpectedParsingFailure;
+
+    const pattern: []const u8 = "{_MY_DEF}+";
+    const expected: []const u8 = "(quantifier :min 1 :max null (group (concat (concat (literal 'x') (literal 'y')) (literal 'z'))))";
+    try expectAstDefinitionSformExact(allocator, &substitutions, pattern, expected);
+}
+
+test "parse alternation empty inside group right" {
+    const allocator = std.testing.allocator;
+    var parser = Parser.init(allocator, "(a|)");
+    defer parser.deinit();
+
+    try std.testing.expectError(Parser.ParseError.SyntaxError, parser.parse());
+}
+
+test "parse alternation empty inside group left" {
+    const allocator = std.testing.allocator;
+    var parser = Parser.init(allocator, "(|b)");
+    defer parser.deinit();
+
+    try std.testing.expectError(Parser.ParseError.SyntaxError, parser.parse());
+}
+
+test "parse quoted string with internal escaped quote" {
+    const allocator = std.testing.allocator;
+
+    const pattern: []const u8 = "\"a\\\"b\"";
+    var parser = Parser.init(allocator, pattern);
+    defer parser.deinit();
+
+    try std.testing.expectError(Parser.ParseError.UnclosedQuote, parser.parse());
+}
+
+test "parse quoted string followed by group" {
+    const allocator = std.testing.allocator;
+    const pattern: []const u8 = "\"a\"(b)";
+    const expected: []const u8 = "(concat (quoted a) (group (literal 'b')))";
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse trailing context with both anchors error" {
+    const allocator = std.testing.allocator;
+    var parser = Parser.init(allocator, "^a/b$");
+    defer parser.deinit();
+
+    try std.testing.expectError(Parser.ParseError.SyntaxError, parser.parse());
+}
+
+test "parse error unexpected character at end" {
+    const allocator = std.testing.allocator;
+
+    const pattern: []const u8 = "abc&";
+
+    const expected: []const u8 = "(concat (concat (concat (literal 'a') (literal 'b')) (literal 'c')) (literal '&'))";
+
+    try expectAstSformExact(allocator, pattern, expected);
+}
+
+test "parse error invalid character inside interval" {
+    const allocator = std.testing.allocator;
+    var parser = Parser.init(allocator, "a{1,z}");
+    defer parser.deinit();
+    try std.testing.expectError(Parser.ParseError.SyntaxError, parser.parse());
+}
+
+test "parse error unclosed brace definition" {
+    const allocator = std.testing.allocator;
+    var substitutions = SubstitutionMap.init(allocator);
+    defer substitutions.deinit();
+    var parser = Parser.initSubsitutions(allocator, "{MYDEF", &substitutions);
+    defer parser.deinit();
+    try std.testing.expectError(Parser.ParseError.UnclosedIdentifier, parser.parse());
+}
+
+test "parse error quantifier on invalid expression start" {
+    const allocator = std.testing.allocator;
+
+    var parser_q = Parser.init(allocator, "?abc");
+    defer parser_q.deinit();
+    try std.testing.expectError(Parser.ParseError.SyntaxError, parser_q.parse());
+
+    var parser_p = Parser.init(allocator, "+abc");
+    defer parser_p.deinit();
+    try std.testing.expectError(Parser.ParseError.SyntaxError, parser_p.parse());
+
+    var parser_a = Parser.init(allocator, "*abc");
+    defer parser_a.deinit();
+    try std.testing.expectError(Parser.ParseError.SyntaxError, parser_a.parse());
+
+    var parser_ivl = Parser.init(allocator, "{1,2}abc");
+    defer parser_ivl.deinit();
+    try std.testing.expectError(Parser.ParseError.SyntaxError, parser_ivl.parse());
+}
