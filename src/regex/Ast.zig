@@ -3,7 +3,7 @@ const mem = std.mem;
 const heap = std.heap;
 const fmt = std.fmt;
 const Allocator = mem.Allocator;
-const Charset = std.bit_set.StaticBitSet(256);
+const Charset = std.bit_set.IntegerBitSet(256);
 
 pub const Ast = struct {
     pool: heap.MemoryPool(Node) = undefined,
