@@ -6,13 +6,13 @@ const Allocator = mem.Allocator;
 const Charset = std.bit_set.IntegerBitSet(256);
 
 pub const Ast = struct {
-    pool: heap.MemoryPool(Node) = undefined,
+    mpool: heap.MemoryPool(Node) = undefined,
     arena: heap.ArenaAllocator = undefined,
     root: ?*Node = null,
 
     pub fn init(gpa: Allocator) Ast {
         return .{
-            .pool = heap.MemoryPool(Node).init(gpa),
+            .mpool = heap.MemoryPool(Node).init(gpa),
             .arena = heap.ArenaAllocator.init(gpa),
             .root = null,
         };
@@ -21,7 +21,7 @@ pub const Ast = struct {
     pub fn deinit(self: *Ast) void {
         defer self.* = undefined;
         self.arena.deinit();
-        self.pool.deinit();
+        self.mpool.deinit();
     }
 
     pub fn scratchAllocator(self: *Ast) Allocator {
@@ -29,7 +29,7 @@ pub const Ast = struct {
     }
 
     pub fn createNode(self: *Ast) Allocator.Error!*Node {
-        return self.pool.create();
+        return self.mpool.create();
     }
 
     pub fn cloneNode(self: *Ast, original: *const Node) !*Node {
@@ -38,23 +38,12 @@ pub const Ast = struct {
             .literal => |orig_lit| {
                 new_node.* = .{ .literal = orig_lit };
             },
-
             .class => |orig_class| {
                 new_node.* = .{ .class = orig_class };
             },
-
             .quoted => |orig_quoted| {
                 const cloned_string = try self.scratchAllocator().dupe(u8, orig_quoted.string);
                 new_node.* = .{ .quoted = .{ .string = cloned_string } };
-            },
-
-            .start_with => |orig_child_ptr| {
-                const cloned_child = try self.cloneNode(orig_child_ptr);
-                new_node.* = .{ .start_with = cloned_child };
-            },
-            .ends_with => |orig_child_ptr| {
-                const cloned_child = try self.cloneNode(orig_child_ptr);
-                new_node.* = .{ .ends_with = cloned_child };
             },
             .group => |orig_child_ptr| {
                 const cloned_child = try self.cloneNode(orig_child_ptr);
@@ -71,7 +60,6 @@ pub const Ast = struct {
                     },
                 };
             },
-
             .alternation => |orig_alt| {
                 const cloned_lhs = try self.cloneNode(orig_alt.lhs);
                 const cloned_rhs = try self.cloneNode(orig_alt.rhs);
@@ -84,14 +72,6 @@ pub const Ast = struct {
                 const cloned_lhs = try self.cloneNode(orig_concat.lhs);
                 const cloned_rhs = try self.cloneNode(orig_concat.rhs);
                 new_node.* = .{ .concat = .{
-                    .lhs = cloned_lhs,
-                    .rhs = cloned_rhs,
-                } };
-            },
-            .trailing => |orig_trail| {
-                const cloned_lhs = try self.cloneNode(orig_trail.lhs);
-                const cloned_rhs = try self.cloneNode(orig_trail.rhs);
-                new_node.* = .{ .trailing = .{
                     .lhs = cloned_lhs,
                     .rhs = cloned_rhs,
                 } };
@@ -114,8 +94,6 @@ pub const Ast = struct {
             lhs: *Node,
             rhs: *Node,
         },
-        start_with: *Node,
-        ends_with: *Node,
         class: struct {
             negated: bool,
             charset: Charset,
@@ -131,24 +109,17 @@ pub const Ast = struct {
             max: ?usize,
             lhs: *Node,
         },
-        trailing: struct {
-            lhs: *Node,
-            rhs: *Node,
-        },
         quoted: struct {
             string: []const u8,
         },
 
         pub const Kind = enum {
             alternation,
-            start_with,
-            ends_with,
             class,
             concat,
             group,
             literal,
             quantifier,
-            trailing,
             quoted,
         };
 
@@ -161,12 +132,6 @@ pub const Ast = struct {
             switch (self) {
                 .alternation => |alt| {
                     try writer.print("(alternation {any} {any})", .{ alt.lhs, alt.rhs });
-                },
-                .start_with => |sw| {
-                    try writer.print("(start_with {any})", .{sw});
-                },
-                .ends_with => |ew| {
-                    try writer.print("(ends_with {any})", .{ew});
                 },
                 .class => |cls| {
                     const negated_str = if (cls.negated) "#t" else "#f";
@@ -198,9 +163,6 @@ pub const Ast = struct {
                         try writer.writeAll("null");
                     }
                     try writer.print(" {any})", .{quant.lhs});
-                },
-                .trailing => |trail| {
-                    try writer.print("(trailing {any} {any})", .{ trail.lhs, trail.rhs });
                 },
                 .quoted => |quote| {
                     try writer.print("(quoted {s})", .{quote.string});
