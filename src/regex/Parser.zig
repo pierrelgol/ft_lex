@@ -11,6 +11,7 @@ const testing = std.testing;
 
 const Ast = @import("Ast.zig").Ast;
 const Node = Ast.Node;
+
 const Buffer256 = std.BoundedArray(u8, 256);
 const Charset = std.bit_set.IntegerBitSet(256);
 const Token = u8;
@@ -34,13 +35,11 @@ const GreaterThan: Token = '>';
 const LessThan: Token = '<';
 const Hyphen: Token = '-';
 const Backslash: Token = '\\';
-
 const Parser = @This();
 
 buf: []const u8,
 pos: usize,
 tok: Token,
-len: usize,
 ast: Ast,
 
 pub const Error = error{
@@ -64,7 +63,6 @@ pub fn init(gpa: Allocator, pattern: []const u8) Parser {
         .buf = pattern,
         .pos = 0,
         .ast = Ast.init(gpa),
-        .len = 0,
         .tok = token,
     };
 }
@@ -85,14 +83,6 @@ pub fn deinit(self: *Parser) void {
 inline fn forward(self: *Parser) void {
     if (self.pos < self.buf.len) {
         self.pos += 1;
-        self.len += 1;
-    }
-}
-
-inline fn backward(self: *Parser) void {
-    if (self.pos != 0) {
-        self.pos -= 1;
-        self.len -= 1;
     }
 }
 
@@ -101,7 +91,8 @@ fn eats(self: *Parser, n: usize) void {
 }
 
 inline fn next(self: *Parser) Token {
-    self.forward();
+    if (self.pos >= self.buf.len) return Eof;
+    self.pos += 1;
     const token = self.tok;
     self.tok = self.current();
     return token;
@@ -535,21 +526,21 @@ fn parsePosixClass(self: *Parser) Error!Charset {
     return class.toCharset();
 }
 
-pub inline fn isUpper(self: Token) bool {
+inline fn isUpper(self: Token) bool {
     return switch (self) {
         'A'...'Z' => true,
         else => false,
     };
 }
 
-pub inline fn isLower(self: Token) bool {
+inline fn isLower(self: Token) bool {
     return switch (self) {
         'a'...'z' => true,
         else => false,
     };
 }
 
-pub inline fn isAlpha(self: Token) bool {
+inline fn isAlpha(self: Token) bool {
     return switch (self) {
         'a'...'z' => true,
         'A'...'Z' => true,
@@ -557,14 +548,14 @@ pub inline fn isAlpha(self: Token) bool {
     };
 }
 
-pub inline fn isDigit(self: Token) bool {
+inline fn isDigit(self: Token) bool {
     return switch (self) {
         '0'...'9' => true,
         else => false,
     };
 }
 
-pub inline fn isHex(self: Token) bool {
+inline fn isHex(self: Token) bool {
     return switch (self) {
         '0'...'9' => true,
         'A'...'F' => true,
@@ -573,11 +564,11 @@ pub inline fn isHex(self: Token) bool {
     };
 }
 
-pub inline fn isAlnum(self: Token) bool {
+inline fn isAlnum(self: Token) bool {
     return self.isAlpha() or self.isDigit();
 }
 
-pub inline fn isPunct(self: Token) bool {
+inline fn isPunct(self: Token) bool {
     return switch (self) {
         33...47 => true,
         58...64 => true,
@@ -587,49 +578,49 @@ pub inline fn isPunct(self: Token) bool {
     };
 }
 
-pub inline fn isBlank(self: Token) bool {
+inline fn isBlank(self: Token) bool {
     return switch (self) {
         ' ', '\t' => true,
         else => false,
     };
 }
 
-pub inline fn isSpace(self: Token) bool {
+inline fn isSpace(self: Token) bool {
     return switch (self) {
         ' ', '\n', '\t', '\r', control_code.vt, control_code.ff => true,
         else => false,
     };
 }
 
-pub inline fn isCntrl(self: Token) bool {
+inline fn isCntrl(self: Token) bool {
     return switch (self) {
         0...31, 127 => true,
         else => false,
     };
 }
 
-pub inline fn isGraph(self: Token) bool {
+inline fn isGraph(self: Token) bool {
     return switch (self) {
         33...126 => true,
         else => false,
     };
 }
 
-pub inline fn isPrint(self: Token) bool {
+inline fn isPrint(self: Token) bool {
     return switch (self) {
         32...126 => true,
         else => false,
     };
 }
 
-pub inline fn isOctal(self: Token) bool {
+inline fn isOctal(self: Token) bool {
     return switch (self) {
         '0'...'7' => true,
         else => false,
     };
 }
 
-pub inline fn isIdentifierStart(self: Token) bool {
+inline fn isIdentifierStart(self: Token) bool {
     return switch (self) {
         'a'...'z' => true,
         'A'...'Z' => true,
@@ -638,7 +629,7 @@ pub inline fn isIdentifierStart(self: Token) bool {
     };
 }
 
-pub inline fn isIdentifierInner(self: Token) bool {
+inline fn isIdentifierInner(self: Token) bool {
     return switch (self) {
         'a'...'z' => true,
         'A'...'Z' => true,
@@ -648,104 +639,104 @@ pub inline fn isIdentifierInner(self: Token) bool {
     };
 }
 
-pub inline fn isEOF(self: Token) bool {
+inline fn isEOF(self: Token) bool {
     return self == Eof;
 }
 
-pub inline fn isAlternation(self: Token) bool {
+inline fn isAlternation(self: Token) bool {
     return self == '|';
 }
 
-pub inline fn isAsterisk(self: Token) bool {
+inline fn isAsterisk(self: Token) bool {
     return self == '*';
 }
 
-pub inline fn isBackslash(self: Token) bool {
+inline fn isBackslash(self: Token) bool {
     return self == '\\';
 }
 
-pub inline fn isColon(self: Token) bool {
+inline fn isColon(self: Token) bool {
     return self == ':';
 }
 
-pub inline fn isComma(self: Token) bool {
+inline fn isComma(self: Token) bool {
     return self == ',';
 }
 
-pub inline fn isDot(self: Token) bool {
+inline fn isDot(self: Token) bool {
     return self == '.';
 }
 
-pub inline fn isDoubleQuote(self: Token) bool {
+inline fn isDoubleQuote(self: Token) bool {
     return self == '"';
 }
 
-pub inline fn isEqualSign(self: Token) bool {
+inline fn isEqualSign(self: Token) bool {
     return self == '=';
 }
 
-pub inline fn isGreaterThan(self: Token) bool {
+inline fn isGreaterThan(self: Token) bool {
     return self == '>';
 }
 
-pub inline fn isHyphen(self: Token) bool {
+inline fn isHyphen(self: Token) bool {
     return self == '-';
 }
 
-pub inline fn isLeftBrace(self: Token) bool {
+inline fn isLeftBrace(self: Token) bool {
     return self == '{';
 }
 
-pub inline fn isLeftBracket(self: Token) bool {
+inline fn isLeftBracket(self: Token) bool {
     return self == '[';
 }
 
-pub inline fn isLeftParenthesis(self: Token) bool {
+inline fn isLeftParenthesis(self: Token) bool {
     return self == '(';
 }
 
-pub inline fn isLessThan(self: Token) bool {
+inline fn isLessThan(self: Token) bool {
     return self == '<';
 }
 
-pub inline fn isPlus(self: Token) bool {
+inline fn isPlus(self: Token) bool {
     return self == '+';
 }
 
-pub inline fn isQuestionMark(self: Token) bool {
+inline fn isQuestionMark(self: Token) bool {
     return self == '?';
 }
 
-pub inline fn isRightBrace(self: Token) bool {
+inline fn isRightBrace(self: Token) bool {
     return self == '}';
 }
 
-pub inline fn isRightBracket(self: Token) bool {
+inline fn isRightBracket(self: Token) bool {
     return self == ']';
 }
 
-pub inline fn isRightParenthesis(self: Token) bool {
+inline fn isRightParenthesis(self: Token) bool {
     return self == ')';
 }
 
-pub inline fn isSlash(self: Token) bool {
+inline fn isSlash(self: Token) bool {
     return self == '/';
 }
 
-pub inline fn isCaret(self: Token) bool {
+inline fn isCaret(self: Token) bool {
     return self == '^';
 }
 
-pub inline fn isDollar(self: Token) bool {
+inline fn isDollar(self: Token) bool {
     return self == '$';
 }
 
-pub inline fn isLiteral(self: Token) bool {
+inline fn isLiteral(self: Token) bool {
     @branchHint(.likely);
     return switch (self) {
         '|', '*', '\\', ':', ',', '.', '"', '=', '>', '-', '{', '[', '(', '<', '+', '?', '}', ']', ')', '^', '$', '/' => {
             @branchHint(.unlikely);
-            return true;
+            return false;
         },
         else => {
             @branchHint(.likely);
@@ -754,7 +745,7 @@ pub inline fn isLiteral(self: Token) bool {
     };
 }
 
-pub fn toBindingPower(self: Token) BindingPower {
+fn toBindingPower(self: Token) BindingPower {
     return switch (self) {
         '|' => .alternation,
         '*' => .quantifier,
@@ -824,33 +815,16 @@ pub const PosixClass = enum {
 
         return charset;
     }
+    const upper_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    const lower_chars = "abcdefghijklmnopqrstuvwxyz";
+    const alpha_chars = upper_chars ++ lower_chars;
+    const digit_chars = "0123456789";
+    const xdigit_chars = digit_chars ++ "abcdef" ++ "ABCDEF";
+    const alnum_chars = alpha_chars ++ digit_chars;
+    const punct_chars = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~";
+    const blank_chars = " \t";
+    const space_chars = std.ascii.whitespace ++ "";
+    const graph_chars = alnum_chars ++ punct_chars;
+    const print_chars = graph_chars ++ " ";
+    const cntrl_chars = "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0A\x0B\x0C\x0D\x0E\x0F\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1A\x1B\x1C\x1D\x1E\x1F\x7F";
 };
-
-const upper_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-const lower_chars = "abcdefghijklmnopqrstuvwxyz";
-const alpha_chars = upper_chars ++ lower_chars;
-const digit_chars = "0123456789";
-const xdigit_chars = digit_chars ++ "abcdef" ++ "ABCDEF";
-const alnum_chars = alpha_chars ++ digit_chars;
-const punct_chars = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~";
-const blank_chars = " \t";
-const space_chars = std.ascii.whitespace ++ "";
-const graph_chars = alnum_chars ++ punct_chars;
-const print_chars = graph_chars ++ " ";
-const cntrl_chars = blk: {
-    var buffer = std.BoundedArray(u8, 33).init(0) catch unreachable;
-    for (0..31) |i| {
-        buffer.appendAssumeCapacity(@intCast(i));
-    }
-    buffer.appendAssumeCapacity(std.ascii.control_code.del);
-    break :blk buffer.constSlice().ptr[0..33] ++ "";
-};
-
-test Parser {
-    const gpa = testing.allocator;
-    const pattern: []const u8 = "";
-    var parser: Parser = .init(gpa, pattern);
-    defer parser.deinit();
-
-    _ = try parser.parse();
-}
