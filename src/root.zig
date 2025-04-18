@@ -1,6 +1,6 @@
 const std = @import("std");
-pub const Parser = @import("regex/Parser.zig");
+pub const regex = @import("regex.zig");
 
 comptime {
-    std.testing.refAllDecls(Parser);
+    std.testing.refAllDeclsRecursive(regex);
 }

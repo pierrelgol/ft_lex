@@ -9,9 +9,492 @@ const Range = std.bit_set.Range;
 const ascii = std.ascii;
 const control_code = ascii.control_code;
 const testing = std.testing;
-
 const Buffer256 = std.BoundedArray(u8, 256);
 const Charset = std.bit_set.IntegerBitSet(256);
+
+pub const Parser = struct {
+    buf: []const u8,
+    pos: usize,
+    tok: Token,
+    ast: Ast,
+
+    pub const Error = error{
+        SyntaxError,
+        UnexpectedToken,
+        UnexpectedEof,
+        EmptyGroup,
+        EmptyClass,
+        EmptyQuote,
+        EmptyDefinition,
+        EmptyInterval,
+        UnclosedBracket,
+        UnclosedBrace,
+        UnclosedQuote,
+        UnclosedParenthesis,
+    } || Allocator.Error;
+
+    pub fn init(gpa: Allocator, pattern: []const u8) Parser {
+        const token = if (pattern.len == 0) Eof else pattern[0];
+        return .{
+            .buf = pattern,
+            .pos = 0,
+            .ast = Ast.init(gpa),
+            .tok = token,
+        };
+    }
+
+    pub fn parse(self: *Parser) Error!Ast {
+        if (isEOF(self.tok)) {
+            self.ast.root = null;
+        } else {
+            self.ast.root = try self.parseExpression(.none);
+        }
+        return self.ast;
+    }
+
+    pub fn deinit(self: *Parser) void {
+        self.ast.deinit();
+    }
+
+    inline fn forward(self: *Parser) void {
+        if (self.pos < self.buf.len) {
+            self.pos += 1;
+        }
+    }
+
+    fn eats(self: *Parser, n: usize) void {
+        for (0..n) |_| _ = self.next();
+    }
+
+    inline fn next(self: *Parser) Token {
+        if (self.pos >= self.buf.len) return Eof;
+        self.pos += 1;
+        const token = self.tok;
+        self.tok = self.current();
+        return token;
+    }
+
+    inline fn peek(self: *const Parser) Token {
+        return if (self.pos + 1 < self.buf.len) self.buf[self.pos + 1] else Eof;
+    }
+
+    inline fn current(self: *const Parser) Token {
+        return if (self.pos < self.buf.len) self.buf[self.pos] else Eof;
+    }
+
+    inline fn orderBindingPower(cur_bp: BindingPower, min_bp: BindingPower) Order {
+        return math.order(cur_bp.toU8(), min_bp.toU8());
+    }
+
+    fn createNode(self: *Parser, init_expr: Node) Allocator.Error!*Node {
+        const node = try self.ast.createNode();
+        node.* = init_expr;
+        return node;
+    }
+
+    fn parseExpression(self: *Parser, min_bp: BindingPower) Error!*Node {
+        var left: *Node = try self.nud();
+        var cur_bp: BindingPower = toBindingPower(self.tok);
+
+        while (!isEOF(self.tok) and orderBindingPower(cur_bp, min_bp) == .gt) {
+            left = try self.led(left);
+            cur_bp = toBindingPower(self.tok);
+        }
+
+        return left;
+    }
+
+    fn nud(self: *Parser) Error!*Node {
+        return switch (self.tok) {
+            Dot => self.nudDot(),
+            LeftBracket => self.nudClass(),
+            LeftParenthesis => self.nudGroup(),
+            DoubleQuote => self.nudQuoted(),
+            Backslash => self.nudEscaped(),
+            Alternation => error.SyntaxError,
+            Asterisk => error.SyntaxError,
+            Plus => error.SyntaxError,
+            QuestionMark => error.SyntaxError,
+            LeftBrace => error.SyntaxError,
+            Eof => error.UnexpectedEof,
+            else => self.nudLiteral(),
+        };
+    }
+
+    fn nudLiteral(self: *Parser) Error!*Node {
+        return self.createNode(.{
+            .literal = self.next(),
+        });
+    }
+
+    fn nudGroup(self: *Parser) Error!*Node {
+        assert(isLeftParenthesis(self.tok));
+        self.eats(1);
+
+        if (isRightParenthesis(self.tok))
+            return error.EmptyGroup;
+
+        const group = try self.parseExpression(.none);
+
+        if (isEOF(self.tok))
+            return error.UnclosedParenthesis
+        else
+            self.eats(1);
+        return self.createNode(.{
+            .group = group,
+        });
+    }
+
+    fn nudQuoted(self: *Parser) Error!*Node {
+        assert(isDoubleQuote(self.tok));
+        self.eats(1);
+        var buffer = Buffer256.init(0) catch unreachable;
+        while (true) : (buffer.appendAssumeCapacity(self.next())) {
+            if (isEOF(self.tok)) return error.UnexpectedEof;
+            if (isDoubleQuote(self.tok)) break;
+        }
+        assert(isDoubleQuote(self.tok));
+        self.eats(1);
+        const allocator = self.ast.scratchAllocator();
+        const string = try allocator.dupe(u8, buffer.constSlice());
+        return self.createNode(.{
+            .quoted = .{
+                .string = string,
+            },
+        });
+    }
+
+    fn nudDot(self: *Parser) Error!*Node {
+        assert(isDot(self.tok));
+        self.eats(1);
+        return self.createNode(.{
+            .class = .{
+                .negated = false,
+                .charset = charset: {
+                    var value: Charset = .initFull();
+                    value.setValue('\n', false);
+                    break :charset value;
+                },
+            },
+        });
+    }
+
+    fn nudClass(self: *Parser) Error!*Node {
+        assert(isLeftBracket(self.tok));
+        self.eats(1);
+        var negated: bool = false;
+        var charset: Charset = .initEmpty();
+        if (isCaret(self.tok)) {
+            negated = true;
+            self.eats(1);
+        }
+
+        if (negated and isRightBracket(self.tok) and (isLeftBracket(self.peek()) or isEOF(self.peek()))) {
+            self.eats(1);
+            charset.set('^');
+            return self.createNode(.{
+                .class = .{
+                    .negated = false,
+                    .charset = charset,
+                },
+            });
+        }
+
+        if (isRightBracket(self.tok) or isHyphen(self.tok) and !isEOF(self.peek())) {
+            charset.set(self.next());
+        }
+        if (isEOF(self.tok)) {
+            return error.EmptyClass;
+        }
+
+        while (true) {
+            if (isEOF(self.tok)) return error.UnclosedBracket;
+            if (isRightBracket(self.tok)) {
+                break;
+            } else if (isLeftBracket(self.tok) and isColon(self.peek())) {
+                const class = try self.parsePosixClass();
+                charset.setUnion(class);
+                continue;
+            } else if (isBackslash(self.tok)) {
+                const escaped = try self.parseEscaped();
+                charset.set(escaped);
+                continue;
+            } else if (isHyphen(self.peek())) {
+                var range: Range = .{
+                    .start = self.tok,
+                    .end = 0,
+                };
+                self.eats(2);
+                if (isRightBracket(self.tok)) {
+                    charset.set(range.start);
+                    charset.set('-');
+                    continue;
+                }
+                range.end = self.tok;
+                if (range.end < range.start) {
+                    charset.set(range.start);
+                    charset.set('-');
+                    charset.set(range.end);
+                } else {
+                    charset.setRangeValue(range, true);
+                }
+                continue;
+            }
+            charset.set(self.next());
+        }
+        assert(isRightBracket(self.tok));
+        self.eats(1);
+        return self.createNode(.{
+            .class = .{
+                .negated = negated,
+                .charset = charset,
+            },
+        });
+    }
+
+    fn nudEscaped(self: *Parser) Error!*Node {
+        assert(isBackslash(self.tok));
+        const escaped = try self.parseEscaped();
+        return self.createNode(.{
+            .literal = escaped,
+        });
+    }
+
+    fn led(self: *Parser, left: *Node) Error!*Node {
+        return switch (self.tok) {
+            Plus => self.ledOneOrMore(left),
+            QuestionMark => self.ledZeroOrOne(left),
+            Asterisk => self.ledZeroOrMore(left),
+            LeftParenthesis => self.ledImplicitConcat(left),
+            Dot => self.ledImplicitConcat(left),
+            LeftBracket => self.ledImplicitConcat(left),
+            DoubleQuote => self.ledImplicitConcat(left),
+            Backslash => self.ledImplicitConcat(left),
+            Alternation => self.ledAlternation(left),
+            LeftBrace => self.ledIntervalExpression(left),
+            Eof => error.UnexpectedEof,
+            else => self.ledImplicitConcat(left),
+        };
+    }
+
+    fn ledImplicitConcat(self: *Parser, left: *Node) Error!*Node {
+        return self.createNode(.{
+            .concat = .{
+                .lhs = left,
+                .rhs = try self.parseExpression(.concatenation),
+            },
+        });
+    }
+
+    fn ledZeroOrOne(self: *Parser, left: *Node) Error!*Node {
+        assert(isQuestionMark(self.tok));
+        self.eats(1);
+        return self.createNode(.{
+            .quantifier = .{
+                .min = 0,
+                .max = 1,
+                .lhs = left,
+            },
+        });
+    }
+
+    fn ledOneOrMore(self: *Parser, left: *Node) Error!*Node {
+        assert(isPlus(self.tok));
+        self.eats(1);
+        return self.createNode(.{
+            .quantifier = .{
+                .min = 1,
+                .max = null,
+                .lhs = left,
+            },
+        });
+    }
+
+    fn ledZeroOrMore(self: *Parser, left: *Node) Error!*Node {
+        assert(isAsterisk(self.tok));
+        self.eats(1);
+        return self.createNode(.{
+            .quantifier = .{
+                .min = 0,
+                .max = null,
+                .lhs = left,
+            },
+        });
+    }
+
+    fn ledIntervalExpression(self: *Parser, left: *Node) Error!*Node {
+        assert(isLeftBrace(self.tok));
+        self.eats(1);
+
+        const min = try self.parseInterval();
+
+        if (isRightBrace(self.tok)) {
+            self.eats(1);
+            return self.createNode(.{
+                .quantifier = .{
+                    .min = min,
+                    .max = min,
+                    .lhs = left,
+                },
+            });
+        }
+
+        if (isComma(self.tok))
+            self.eats(1)
+        else
+            return error.SyntaxError;
+
+        if (isRightBrace(self.tok)) {
+            self.eats(1);
+            return self.createNode(.{
+                .quantifier = .{
+                    .min = min,
+                    .max = null,
+                    .lhs = left,
+                },
+            });
+        }
+
+        const max = try self.parseInterval();
+
+        if (isRightBrace(self.tok))
+            self.eats(1)
+        else
+            return error.UnclosedBrace;
+
+        return self.createNode(.{ .quantifier = .{
+            .min = min,
+            .max = max,
+            .lhs = left,
+        } });
+    }
+
+    fn ledAlternation(self: *Parser, left: *Node) Error!*Node {
+        assert(isAlternation(self.tok));
+        self.eats(1);
+
+        if (isEOF(self.tok)) return error.UnexpectedEof;
+        if (self.tok == Alternation) return error.SyntaxError;
+        if (isPlus(self.tok) or isAsterisk(self.tok) or isQuestionMark(self.tok) or isLeftBrace(self.tok)) {
+            return error.SyntaxError;
+        }
+
+        const rhs = try self.parseExpression(.alternation);
+        return self.createNode(.{ .alternation = .{
+            .lhs = left,
+            .rhs = rhs,
+        } });
+    }
+
+    fn parseInterval(self: *Parser) Error!usize {
+        if (!isDigit(self.tok)) return error.SyntaxError;
+
+        var buffer = Buffer256.init(0) catch unreachable;
+
+        while (true) : (buffer.appendAssumeCapacity(self.next())) {
+            if (isEOF(self.tok)) return error.UnclosedBrace;
+            if (isComma(self.tok) or isRightBrace(self.tok)) break;
+            if (!isDigit(self.tok)) return error.SyntaxError;
+        }
+        return std.fmt.parseUnsigned(usize, buffer.constSlice(), 10) catch {
+            return error.SyntaxError;
+        };
+    }
+
+    fn parseHexadecimal(self: *Parser) Error!Token {
+        assert(self.tok == 'x' or self.tok == 'X');
+        self.eats(1);
+
+        var buffer = Buffer256.init(0) catch unreachable;
+        for (0..2) |_| {
+            if (isHex(self.tok))
+                buffer.appendAssumeCapacity(self.next())
+            else
+                break;
+        }
+
+        return std.fmt.parseUnsigned(u8, buffer.constSlice(), 16) catch {
+            return error.SyntaxError;
+        };
+    }
+
+    fn parseOctal(self: *Parser, len: usize) Error!Token {
+        assert(isOctal(self.tok) or self.tok == 'o');
+        if (len == 2) self.eats(1);
+
+        var buffer = Buffer256.init(0) catch unreachable;
+        for (0..len) |_| {
+            if (isOctal(self.tok))
+                buffer.appendAssumeCapacity(self.next())
+            else
+                break;
+        }
+
+        return std.fmt.parseUnsigned(u8, buffer.constSlice(), 8) catch {
+            return error.SyntaxError;
+        };
+    }
+
+    fn parseEscaped(self: *Parser) Error!Token {
+        assert(isBackslash(self.tok));
+        self.eats(1);
+        const token = self.tok;
+        return switch (token) {
+            Eof => tok: {
+                break :tok error.UnexpectedEof;
+            },
+            'n' => tok: {
+                self.eats(1);
+                break :tok '\n';
+            },
+            't' => tok: {
+                self.eats(1);
+                break :tok '\t';
+            },
+            'r' => tok: {
+                self.eats(1);
+                break :tok '\r';
+            },
+            'f' => tok: {
+                self.eats(1);
+                break :tok control_code.ff;
+            },
+            'v' => tok: {
+                self.eats(1);
+                break :tok control_code.vt;
+            },
+            '0'...'7' => tok: {
+                break :tok try self.parseOctal(3);
+            },
+            'o' => tok: {
+                break :tok try self.parseOctal(2);
+            },
+            'x', 'X' => tok: {
+                break :tok try self.parseHexadecimal();
+            },
+            else => tok: {
+                self.eats(1);
+                break :tok token;
+            },
+        };
+    }
+
+    fn parsePosixClass(self: *Parser) Error!Charset {
+        assert(isLeftBracket(self.tok) and isColon(self.peek()));
+        self.eats(2);
+
+        var buffer = Buffer256.init(0) catch unreachable;
+        while (true) : (buffer.appendAssumeCapacity(self.next())) {
+            if (isColon(self.tok) and isRightBracket(self.peek())) {
+                self.eats(2);
+                break;
+            }
+        }
+        const class = std.meta.stringToEnum(PosixClass, buffer.constSlice()) orelse return error.SyntaxError;
+        return class.toCharset();
+    }
+};
+
 const Token = u8;
 const Eof: Token = 0xFF;
 const DoubleQuote: Token = '"';
@@ -33,488 +516,6 @@ const GreaterThan: Token = '>';
 const LessThan: Token = '<';
 const Hyphen: Token = '-';
 const Backslash: Token = '\\';
-const Parser = @This();
-
-buf: []const u8,
-pos: usize,
-tok: Token,
-ast: Ast,
-
-pub const Error = error{
-    SyntaxError,
-    UnexpectedToken,
-    UnexpectedEof,
-    EmptyGroup,
-    EmptyClass,
-    EmptyQuote,
-    EmptyDefinition,
-    EmptyInterval,
-    UnclosedBracket,
-    UnclosedBrace,
-    UnclosedQuote,
-    UnclosedParenthesis,
-} || Allocator.Error;
-
-pub fn init(gpa: Allocator, pattern: []const u8) Parser {
-    const token = if (pattern.len == 0) Eof else pattern[0];
-    return .{
-        .buf = pattern,
-        .pos = 0,
-        .ast = Ast.init(gpa),
-        .tok = token,
-    };
-}
-
-pub fn parse(self: *Parser) Error!Ast {
-    if (isEOF(self.tok)) {
-        self.ast.root = null;
-    } else {
-        self.ast.root = try self.parseExpression(.none);
-    }
-    return self.ast;
-}
-
-pub fn deinit(self: *Parser) void {
-    self.ast.deinit();
-}
-
-inline fn forward(self: *Parser) void {
-    if (self.pos < self.buf.len) {
-        self.pos += 1;
-    }
-}
-
-fn eats(self: *Parser, n: usize) void {
-    for (0..n) |_| _ = self.next();
-}
-
-inline fn next(self: *Parser) Token {
-    if (self.pos >= self.buf.len) return Eof;
-    self.pos += 1;
-    const token = self.tok;
-    self.tok = self.current();
-    return token;
-}
-
-inline fn peek(self: *const Parser) Token {
-    return if (self.pos + 1 < self.buf.len) self.buf[self.pos + 1] else Eof;
-}
-
-inline fn current(self: *const Parser) Token {
-    return if (self.pos < self.buf.len) self.buf[self.pos] else Eof;
-}
-
-inline fn orderBindingPower(cur_bp: BindingPower, min_bp: BindingPower) Order {
-    return math.order(cur_bp.toU8(), min_bp.toU8());
-}
-
-fn createNode(self: *Parser, init_expr: Node) Allocator.Error!*Node {
-    const node = try self.ast.createNode();
-    node.* = init_expr;
-    return node;
-}
-
-fn parseExpression(self: *Parser, min_bp: BindingPower) Error!*Node {
-    var left: *Node = try self.nud();
-    var cur_bp: BindingPower = toBindingPower(self.tok);
-
-    while (!isEOF(self.tok) and orderBindingPower(cur_bp, min_bp) == .gt) {
-        left = try self.led(left);
-        cur_bp = toBindingPower(self.tok);
-    }
-
-    return left;
-}
-
-fn nud(self: *Parser) Error!*Node {
-    return switch (self.tok) {
-        Dot => self.nudDot(),
-        LeftBracket => self.nudClass(),
-        LeftParenthesis => self.nudGroup(),
-        DoubleQuote => self.nudQuoted(),
-        Backslash => self.nudEscaped(),
-        Alternation => error.SyntaxError,
-        Asterisk => error.SyntaxError,
-        Plus => error.SyntaxError,
-        QuestionMark => error.SyntaxError,
-        LeftBrace => error.SyntaxError,
-        Eof => error.UnexpectedEof,
-        else => self.nudLiteral(),
-    };
-}
-
-fn nudLiteral(self: *Parser) Error!*Node {
-    return self.createNode(.{
-        .literal = self.next(),
-    });
-}
-
-fn nudGroup(self: *Parser) Error!*Node {
-    assert(isLeftParenthesis(self.tok));
-    self.eats(1);
-
-    if (isRightParenthesis(self.tok))
-        return error.EmptyGroup;
-
-    const group = try self.parseExpression(.none);
-
-    if (isEOF(self.tok))
-        return error.UnclosedParenthesis
-    else
-        self.eats(1);
-    return self.createNode(.{
-        .group = group,
-    });
-}
-
-fn nudQuoted(self: *Parser) Error!*Node {
-    assert(isDoubleQuote(self.tok));
-    self.eats(1);
-    var buffer = Buffer256.init(0) catch unreachable;
-    while (true) : (buffer.appendAssumeCapacity(self.next())) {
-        if (isEOF(self.tok)) return error.UnexpectedEof;
-        if (isDoubleQuote(self.tok)) break;
-    }
-    assert(isDoubleQuote(self.tok));
-    self.eats(1);
-    const allocator = self.ast.scratchAllocator();
-    const string = try allocator.dupe(u8, buffer.constSlice());
-    return self.createNode(.{
-        .quoted = .{
-            .string = string,
-        },
-    });
-}
-
-fn nudDot(self: *Parser) Error!*Node {
-    assert(isDot(self.tok));
-    self.eats(1);
-    return self.createNode(.{
-        .class = .{
-            .negated = false,
-            .charset = charset: {
-                var value: Charset = .initFull();
-                value.setValue('\n', false);
-                break :charset value;
-            },
-        },
-    });
-}
-
-fn nudClass(self: *Parser) Error!*Node {
-    assert(isLeftBracket(self.tok));
-    self.eats(1);
-    var negated: bool = false;
-    var charset: Charset = .initEmpty();
-    if (isCaret(self.tok)) {
-        negated = true;
-        self.eats(1);
-    }
-
-    if (negated and isRightBracket(self.tok) and (isLeftBracket(self.peek()) or isEOF(self.peek()))) {
-        self.eats(1);
-        charset.set('^');
-        return self.createNode(.{
-            .class = .{
-                .negated = false,
-                .charset = charset,
-            },
-        });
-    }
-
-    if (isRightBracket(self.tok) or isHyphen(self.tok) and !isEOF(self.peek())) {
-        charset.set(self.next());
-    }
-    if (isEOF(self.tok)) {
-        return error.EmptyClass;
-    }
-
-    while (true) {
-        if (isEOF(self.tok)) return error.UnclosedBracket;
-        if (isRightBracket(self.tok)) {
-            break;
-        } else if (isLeftBracket(self.tok) and isColon(self.peek())) {
-            const class = try self.parsePosixClass();
-            charset.setUnion(class);
-            continue;
-        } else if (isBackslash(self.tok)) {
-            const escaped = try self.parseEscaped();
-            charset.set(escaped);
-            continue;
-        } else if (isHyphen(self.peek())) {
-            var range: Range = .{
-                .start = self.tok,
-                .end = 0,
-            };
-            self.eats(2);
-            if (isRightBracket(self.tok)) {
-                charset.set(range.start);
-                charset.set('-');
-                continue;
-            }
-            range.end = self.tok;
-            if (range.end < range.start) {
-                charset.set(range.start);
-                charset.set('-');
-                charset.set(range.end);
-            } else {
-                charset.setRangeValue(range, true);
-            }
-            continue;
-        }
-        charset.set(self.next());
-    }
-    assert(isRightBracket(self.tok));
-    self.eats(1);
-    return self.createNode(.{
-        .class = .{
-            .negated = negated,
-            .charset = charset,
-        },
-    });
-}
-
-fn nudEscaped(self: *Parser) Error!*Node {
-    assert(isBackslash(self.tok));
-    const escaped = try self.parseEscaped();
-    return self.createNode(.{
-        .literal = escaped,
-    });
-}
-
-fn led(self: *Parser, left: *Node) Error!*Node {
-    return switch (self.tok) {
-        Plus => self.ledOneOrMore(left),
-        QuestionMark => self.ledZeroOrOne(left),
-        Asterisk => self.ledZeroOrMore(left),
-        LeftParenthesis => self.ledImplicitConcat(left),
-        Dot => self.ledImplicitConcat(left),
-        LeftBracket => self.ledImplicitConcat(left),
-        DoubleQuote => self.ledImplicitConcat(left),
-        Backslash => self.ledImplicitConcat(left),
-        Alternation => self.ledAlternation(left),
-        LeftBrace => self.ledIntervalExpression(left),
-        Eof => error.UnexpectedEof,
-        else => self.ledImplicitConcat(left),
-    };
-}
-
-fn ledImplicitConcat(self: *Parser, left: *Node) Error!*Node {
-    return self.createNode(.{
-        .concat = .{
-            .lhs = left,
-            .rhs = try self.parseExpression(.concatenation),
-        },
-    });
-}
-
-fn ledZeroOrOne(self: *Parser, left: *Node) Error!*Node {
-    assert(isQuestionMark(self.tok));
-    self.eats(1);
-    return self.createNode(.{
-        .quantifier = .{
-            .min = 0,
-            .max = 1,
-            .lhs = left,
-        },
-    });
-}
-
-fn ledOneOrMore(self: *Parser, left: *Node) Error!*Node {
-    assert(isPlus(self.tok));
-    self.eats(1);
-    return self.createNode(.{
-        .quantifier = .{
-            .min = 1,
-            .max = null,
-            .lhs = left,
-        },
-    });
-}
-
-fn ledZeroOrMore(self: *Parser, left: *Node) Error!*Node {
-    assert(isAsterisk(self.tok));
-    self.eats(1);
-    return self.createNode(.{
-        .quantifier = .{
-            .min = 0,
-            .max = null,
-            .lhs = left,
-        },
-    });
-}
-
-fn ledIntervalExpression(self: *Parser, left: *Node) Error!*Node {
-    assert(isLeftBrace(self.tok));
-    self.eats(1);
-
-    const min = try self.parseInterval();
-
-    if (isRightBrace(self.tok)) {
-        self.eats(1);
-        return self.createNode(.{
-            .quantifier = .{
-                .min = min,
-                .max = min,
-                .lhs = left,
-            },
-        });
-    }
-
-    if (isComma(self.tok))
-        self.eats(1)
-    else
-        return error.SyntaxError;
-
-    if (isRightBrace(self.tok)) {
-        self.eats(1);
-        return self.createNode(.{
-            .quantifier = .{
-                .min = min,
-                .max = null,
-                .lhs = left,
-            },
-        });
-    }
-
-    const max = try self.parseInterval();
-
-    if (isRightBrace(self.tok))
-        self.eats(1)
-    else
-        return error.UnclosedBrace;
-
-    return self.createNode(.{ .quantifier = .{
-        .min = min,
-        .max = max,
-        .lhs = left,
-    } });
-}
-
-fn ledAlternation(self: *Parser, left: *Node) Error!*Node {
-    assert(isAlternation(self.tok));
-    self.eats(1);
-
-    if (isEOF(self.tok)) return error.UnexpectedEof;
-    if (self.tok == Alternation) return error.SyntaxError;
-    if (isPlus(self.tok) or isAsterisk(self.tok) or isQuestionMark(self.tok) or isLeftBrace(self.tok)) {
-        return error.SyntaxError;
-    }
-
-    const rhs = try self.parseExpression(.alternation);
-    return self.createNode(.{ .alternation = .{
-        .lhs = left,
-        .rhs = rhs,
-    } });
-}
-
-fn parseInterval(self: *Parser) Error!usize {
-    if (!isDigit(self.tok)) return error.SyntaxError;
-
-    var buffer = Buffer256.init(0) catch unreachable;
-
-    while (true) : (buffer.appendAssumeCapacity(self.next())) {
-        if (isEOF(self.tok)) return error.UnclosedBrace;
-        if (isComma(self.tok) or isRightBrace(self.tok)) break;
-        if (!isDigit(self.tok)) return error.SyntaxError;
-    }
-    return std.fmt.parseUnsigned(usize, buffer.constSlice(), 10) catch {
-        return error.SyntaxError;
-    };
-}
-
-fn parseHexadecimal(self: *Parser) Error!Token {
-    assert(self.tok == 'x' or self.tok == 'X');
-    self.eats(1);
-
-    var buffer = Buffer256.init(0) catch unreachable;
-    for (0..2) |_| {
-        if (isHex(self.tok))
-            buffer.appendAssumeCapacity(self.next())
-        else
-            break;
-    }
-
-    return std.fmt.parseUnsigned(u8, buffer.constSlice(), 16) catch {
-        return error.SyntaxError;
-    };
-}
-
-fn parseOctal(self: *Parser, len: usize) Error!Token {
-    assert(isOctal(self.tok) or self.tok == 'o');
-    if (len == 2) self.eats(1);
-
-    var buffer = Buffer256.init(0) catch unreachable;
-    for (0..len) |_| {
-        if (isOctal(self.tok))
-            buffer.appendAssumeCapacity(self.next())
-        else
-            break;
-    }
-
-    return std.fmt.parseUnsigned(u8, buffer.constSlice(), 8) catch {
-        return error.SyntaxError;
-    };
-}
-
-fn parseEscaped(self: *Parser) Error!Token {
-    assert(isBackslash(self.tok));
-    self.eats(1);
-    const token = self.tok;
-    return switch (token) {
-        Eof => tok: {
-            break :tok error.UnexpectedEof;
-        },
-        'n' => tok: {
-            self.eats(1);
-            break :tok '\n';
-        },
-        't' => tok: {
-            self.eats(1);
-            break :tok '\t';
-        },
-        'r' => tok: {
-            self.eats(1);
-            break :tok '\r';
-        },
-        'f' => tok: {
-            self.eats(1);
-            break :tok control_code.ff;
-        },
-        'v' => tok: {
-            self.eats(1);
-            break :tok control_code.vt;
-        },
-        '0'...'7' => tok: {
-            break :tok try self.parseOctal(3);
-        },
-        'o' => tok: {
-            break :tok try self.parseOctal(2);
-        },
-        'x', 'X' => tok: {
-            break :tok try self.parseHexadecimal();
-        },
-        else => tok: {
-            self.eats(1);
-            break :tok token;
-        },
-    };
-}
-
-fn parsePosixClass(self: *Parser) Error!Charset {
-    assert(isLeftBracket(self.tok) and isColon(self.peek()));
-    self.eats(2);
-
-    var buffer = Buffer256.init(0) catch unreachable;
-    while (true) : (buffer.appendAssumeCapacity(self.next())) {
-        if (isColon(self.tok) and isRightBracket(self.peek())) {
-            self.eats(2);
-            break;
-        }
-    }
-    const class = std.meta.stringToEnum(PosixClass, buffer.constSlice()) orelse return error.SyntaxError;
-    return class.toCharset();
-}
 
 inline fn isUpper(self: Token) bool {
     return switch (self) {
@@ -997,6 +998,7 @@ pub const Node = union(Kind) {
         }
     }
 };
+
 const Err = struct {
     TestUnexpectedParsingFailure: void,
     TestUnexpectedFormattingFailure: void,
