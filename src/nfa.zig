@@ -87,7 +87,7 @@ pub const NfaBuilder = struct {
             .concat => |c| {
                 const f1 = try self.nfaFromAst(c.lhs);
                 const f2 = try self.nfaFromAst(c.rhs);
-                try self.addEdge(f1.accept, Symbol.epsilon, f2.start);
+                try self.addEdge(f1.accept, .epsilon, f2.start);
                 return Frag{ .start = f1.start, .accept = f2.accept };
             },
             else => unreachable,
