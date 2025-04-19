@@ -1011,7 +1011,6 @@ const Err = struct {
 fn expectAstSformExact(gpa: Allocator, pattern: []const u8, expected: []const u8) !void {
     var parser = Parser.init(gpa, pattern);
     defer parser.deinit();
-    std.debug.assert();
 
     const ast = parser.parse() catch |err| {
         std.debug.print("Parsing failed for pattern \"{s}\": {s}\n", .{ pattern, @errorName(err) });

@@ -6,9 +6,6 @@ const regex = @import("regex.zig");
 const Parser = regex.Parser;
 const Ast = regex.Ast;
 const AstNode = regex.Node;
-const LinkedList = std.SinglyLinkedList;
-const Node = LinkedList.Node;
-const ArrayList = std.ArrayListUnmanaged;
 const assert = std.debug.assert;
 
 pub const Symbol = union(Kind) {
@@ -40,7 +37,7 @@ pub const Symbol = union(Kind) {
     ) !void {
         switch (self) {
             .epsilon => try writer.print("ε", .{}),
-            .char => |c| try writer.print("{c}", .{c}),
+            .char => try writer.print("{c}", .{self.char}),
         }
     }
 };
@@ -57,11 +54,11 @@ const Frag = struct {
 };
 
 pub const NfaBuilder = struct {
-    allocator: *Allocator,
+    allocator: Allocator,
     edges: std.ArrayList(Edge),
     numStates: usize,
 
-    pub fn init(alloc: *Allocator) NfaBuilder {
+    pub fn init(alloc: Allocator) NfaBuilder {
         return .{
             .allocator = alloc,
             .edges = std.ArrayList(Edge).init(alloc),
@@ -76,21 +73,20 @@ pub const NfaBuilder = struct {
     }
 
     pub fn addEdge(self: *NfaBuilder, from: usize, sym: Symbol, to: usize) !void {
-        try self.edges.append(self.allocator, Edge{ .from = from, .sym = sym, .to = to });
+        try self.edges.append(Edge{ .from = from, .sym = sym, .to = to });
     }
 
     pub fn nfaFromAst(self: *NfaBuilder, node: *AstNode) !Frag {
         return switch (node.*) {
             .literal => |lit| {
-                const s = self.addState();
-                const t = self.addState();
-                try self.addEdge(s, Symbol{ .char = lit }, t);
-                return Frag{ .start = s, .accept = t };
+                const start = self.addState();
+                const accept = self.addState();
+                try self.addEdge(start, Symbol{ .char = lit }, accept);
+                return Frag{ .start = start, .accept = accept };
             },
             .concat => |c| {
                 const f1 = try self.nfaFromAst(c.lhs);
                 const f2 = try self.nfaFromAst(c.rhs);
-
                 try self.addEdge(f1.accept, Symbol.epsilon, f2.start);
                 return Frag{ .start = f1.start, .accept = f2.accept };
             },
@@ -102,12 +98,16 @@ pub const NfaBuilder = struct {
         const n = self.numStates;
 
         var counts = std.ArrayList(usize).init(self.allocator);
-        try counts.resize(self.allocator, n, 0);
+        try counts.ensureTotalCapacityPrecise(n);
+
+        for (0..n) |_| try counts.append(0);
+
         for (self.edges.items) |e| counts.items[e.from] += 1;
 
         var offsets = std.ArrayList(usize).init(self.allocator);
+        try offsets.ensureTotalCapacityPrecise(n + 1);
         var sum: usize = 0;
-        try offsets.append(0);
+        try offsets.append(sum);
         for (counts.items) |c| {
             sum += c;
             try offsets.append(sum);
@@ -115,11 +115,14 @@ pub const NfaBuilder = struct {
 
         var symbols = std.ArrayList(Symbol).init(self.allocator);
         var dests = std.ArrayList(usize).init(self.allocator);
-        try symbols.resize(self.allocator, sum, Symbol.epsilon);
-        try dests.resize(self.allocator, sum, 0);
+
+        try symbols.resize(sum);
+        try dests.resize(sum);
 
         var next = std.ArrayList(usize).init(self.allocator);
-        try next.appendAll(self.allocator, offsets.items[0..n]);
+        try next.ensureTotalCapacityPrecise(n);
+
+        for (0..n) |i| try next.append(offsets.items[i]);
 
         for (self.edges.items) |e| {
             const idx = next.items[e.from];
@@ -128,8 +131,8 @@ pub const NfaBuilder = struct {
             next.items[e.from] += 1;
         }
 
-        next.deinit(self.allocator);
-        counts.deinit(self.allocator);
+        next.deinit();
+        counts.deinit();
 
         return Nfa{
             .allocator = self.allocator,
@@ -144,7 +147,7 @@ pub const NfaBuilder = struct {
 };
 
 pub const Nfa = struct {
-    allocator: *Allocator,
+    allocator: Allocator,
     symbols: std.ArrayList(Symbol),
     dests: std.ArrayList(usize),
     offsets: std.ArrayList(usize),
@@ -153,9 +156,9 @@ pub const Nfa = struct {
     accept: usize,
 
     pub fn deinit(self: *Nfa) void {
-        self.offsets.deinit(self.allocator);
-        self.dests.deinit(self.allocator);
-        self.symbols.deinit(self.allocator);
+        self.offsets.deinit();
+        self.dests.deinit();
+        self.symbols.deinit();
     }
 
     pub fn transitions(self: *Nfa, state: usize) TransitionSlice {
@@ -174,10 +177,10 @@ pub const Nfa = struct {
         defer {
             visited.deinit();
             stack.deinit();
-
             buf.deinit();
         }
         var writer = buf.writer();
+
         try stack.append(self.start);
         while (stack.pop()) |stateId| {
             if (visited.contains(stateId)) continue;
@@ -186,22 +189,19 @@ pub const Nfa = struct {
             const ts = self.transitions(stateId);
             for (ts.symbols, 0..) |sym, i| {
                 const destId = ts.dests[i];
-
                 switch (sym.kind()) {
-                    .char => |c| {
-                        try writer.print("n{d} -> n{d} [label=\"{c}\"]\n", .{ stateId, destId, c });
+                    .char => {
+                        try writer.print("n{d} -> n{d} [label=\"{c}\"]\n", .{ stateId, destId, sym.char });
                     },
                     .epsilon => {
                         try writer.print("n{d} -> n{d} [label=\"ε\" style=dashed]\n", .{ stateId, destId });
                     },
                 }
-
                 try stack.append(destId);
             }
         }
 
         try writer.print("n{d} [shape=\"doublecircle\"]\n", .{self.accept});
-
         return buf.toOwnedSlice();
     }
 };
@@ -210,3 +210,26 @@ pub const TransitionSlice = struct {
     symbols: []Symbol,
     dests: []usize,
 };
+
+test "simple" {
+    const gpa = std.testing.allocator;
+    const pattern: []const u8 = "abc";
+
+    var arena: heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+
+    var parser: Parser = .init(gpa, pattern);
+    defer parser.deinit();
+
+    const ast = try parser.parse();
+    const root = ast.root.?;
+
+    var nfabuilder = NfaBuilder.init(arena.allocator());
+    const frag = try nfabuilder.nfaFromAst(root);
+    var nfa = try nfabuilder.build(frag);
+    defer nfa.deinit();
+
+    const str = try nfa.stringify(gpa);
+    defer gpa.free(str);
+    std.debug.print("\n{s}", .{str});
+}
