@@ -34,6 +34,7 @@ pub const Parser = struct {
     } || Allocator.Error;
 
     pub fn init(gpa: Allocator, pattern: []const u8) Parser {
+        assert(pattern.len <= 256);
         const token = if (pattern.len == 0) Eof else pattern[0];
         return .{
             .buf = pattern,
@@ -63,6 +64,7 @@ pub const Parser = struct {
     }
 
     fn eats(self: *Parser, n: usize) void {
+        assert(n != 0);
         for (0..n) |_| _ = self.next();
     }
 
@@ -182,8 +184,10 @@ pub const Parser = struct {
     fn nudClass(self: *Parser) Error!*Node {
         assert(isLeftBracket(self.tok));
         self.eats(1);
+
         var negated: bool = false;
         var charset: Charset = .initEmpty();
+
         if (isCaret(self.tok)) {
             negated = true;
             self.eats(1);
@@ -1007,6 +1011,7 @@ const Err = struct {
 fn expectAstSformExact(gpa: Allocator, pattern: []const u8, expected: []const u8) !void {
     var parser = Parser.init(gpa, pattern);
     defer parser.deinit();
+    std.debug.assert();
 
     const ast = parser.parse() catch |err| {
         std.debug.print("Parsing failed for pattern \"{s}\": {s}\n", .{ pattern, @errorName(err) });
