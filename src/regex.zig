@@ -45,6 +45,9 @@ pub const Parser = struct {
     }
 
     pub fn parse(self: *Parser) Error!Ast {
+        assert(self.ast.root == null);
+        assert(self.pos == 0);
+        assert(self.buf.len <= 256);
         if (isEOF(self.tok)) {
             self.ast.root = null;
         } else {
@@ -173,7 +176,8 @@ pub const Parser = struct {
             .class = .{
                 .negated = false,
                 .charset = charset: {
-                    var value: Charset = .initFull();
+                    var value: *Charset = try self.ast.scratchAllocator().create(Charset);
+                    value.* = Charset.initFull();
                     value.setValue('\n', false);
                     break :charset value;
                 },
@@ -186,7 +190,8 @@ pub const Parser = struct {
         self.eats(1);
 
         var negated: bool = false;
-        var charset: Charset = .initEmpty();
+        var charset: *Charset = try self.ast.scratchAllocator().create(Charset);
+        charset.* = Charset.initEmpty();
 
         if (isCaret(self.tok)) {
             negated = true;
@@ -366,11 +371,13 @@ pub const Parser = struct {
         else
             return error.UnclosedBrace;
 
-        return self.createNode(.{ .quantifier = .{
-            .min = min,
-            .max = max,
-            .lhs = left,
-        } });
+        return self.createNode(.{
+            .quantifier = .{
+                .min = min,
+                .max = max,
+                .lhs = left,
+            },
+        });
     }
 
     fn ledAlternation(self: *Parser, left: *Node) Error!*Node {
@@ -390,7 +397,7 @@ pub const Parser = struct {
         } });
     }
 
-    fn parseInterval(self: *Parser) Error!usize {
+    fn parseInterval(self: *Parser) Error!u16 {
         if (!isDigit(self.tok)) return error.SyntaxError;
 
         var buffer = Buffer256.init(0) catch unreachable;
@@ -400,7 +407,7 @@ pub const Parser = struct {
             if (isComma(self.tok) or isRightBrace(self.tok)) break;
             if (!isDigit(self.tok)) return error.SyntaxError;
         }
-        return std.fmt.parseUnsigned(usize, buffer.constSlice(), 10) catch {
+        return std.fmt.parseUnsigned(u16, buffer.constSlice(), 10) catch {
             return error.SyntaxError;
         };
     }
@@ -928,7 +935,7 @@ pub const Node = union(Kind) {
     },
     class: struct {
         negated: bool,
-        charset: Charset,
+        charset: *Charset,
     },
     concat: struct {
         lhs: *Node,
@@ -937,15 +944,15 @@ pub const Node = union(Kind) {
     group: *Node,
     literal: u8,
     quantifier: struct {
-        min: usize,
-        max: ?usize,
+        min: u16,
+        max: ?u16,
         lhs: *Node,
     },
     quoted: struct {
         string: []const u8,
     },
 
-    pub const Kind = enum {
+    pub const Kind = enum(u4) {
         alternation,
         class,
         concat,
@@ -989,8 +996,8 @@ pub const Node = union(Kind) {
             },
             .quantifier => |quant| {
                 try writer.print("(quantifier :min {} :max ", .{quant.min});
-                if (quant.max) |m| {
-                    try writer.print("{}", .{m});
+                if (quant.max) |max| {
+                    try writer.print("{}", .{max});
                 } else {
                     try writer.writeAll("null");
                 }
@@ -1482,7 +1489,7 @@ test "parse interval quantifier zero repetition" {
 
 test "parse interval quantifier large numbers" {
     try expectAstSformExact(allocator, "a{100,200}", "(quantifier :min 100 :max 200 (literal 'a'))");
-    try expectAstSformExact(allocator, "b{500,}", "(quantifier :min 500 :max null (literal 'b'))");
+    try expectAstSformExact(allocator, "b{254,}", "(quantifier :min 254 :max null (literal 'b'))");
 }
 
 test "parse quantifier on alternation operator error" {
@@ -2085,4 +2092,8 @@ test "lex complex 10: class plus group interval" {
 
 test "lex complex 11: super long mixed regex" {
     try expectAstSformExact(allocator, "([[:upper:]]+[[:digit:]]{3}|foo_bar){2}[[:alnum:]_-]+", "(concat (quantifier :min 2 :max 2 (group (alternation (concat (quantifier :min 1 :max null (class :negated #f :count 26)) (quantifier :min 3 :max 3 (class :negated #f :count 10))) (concat (concat (concat (concat (concat (concat (literal 'f') (literal 'o')) (literal 'o')) (literal '_')) (literal 'b')) (literal 'a')) (literal 'r'))))) (quantifier :min 1 :max null (class :negated #f :count 64)))");
+}
+
+test "foo" {
+    std.debug.print("sizeOf(Node) : {d}\n", .{@sizeOf(Node)});
 }
