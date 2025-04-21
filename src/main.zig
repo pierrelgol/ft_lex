@@ -2,7 +2,7 @@ const std = @import("std");
 const Parser = @import("regex.zig").Parser;
 
 pub fn main() !void {
-    var buffer: [2 * std.heap.pageSize()]u8 = undefined;
+    var buffer: [8 * std.heap.pageSize()]u8 = undefined;
     var fba_instance = std.heap.FixedBufferAllocator.init(buffer[0..]);
     const fba = fba_instance.allocator();
 
