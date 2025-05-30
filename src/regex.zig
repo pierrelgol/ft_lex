@@ -10,7 +10,7 @@ const ascii = std.ascii;
 const control_code = ascii.control_code;
 const testing = std.testing;
 const Buffer256 = std.BoundedArray(u8, 256);
-const Charset = std.bit_set.IntegerBitSet(256);
+pub const Charset = std.bit_set.IntegerBitSet(256);
 
 pub const Parser = struct {
     buf: []const u8,

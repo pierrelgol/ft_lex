@@ -1,6 +1,7 @@
 const std = @import("std");
 const Parser = @import("regex.zig").Parser;
 
+pub fn foo() void {}
 pub fn main() !void {
     var buffer: [8 * std.heap.pageSize()]u8 = undefined;
     var fba_instance = std.heap.FixedBufferAllocator.init(buffer[0..]);
