@@ -1,8 +1,8 @@
 const std = @import("std");
-pub const regex = @import("regex.zig");
-pub const Gloushkov = @import("Gloushkov.zig");
+pub const Parser = @import("Parser.zig");
+pub const Glushkov = @import("Glushkov.zig");
 
 comptime {
-    std.testing.refAllDeclsRecursive(regex);
-    std.testing.refAllDeclsRecursive(Gloushkov);
+    std.testing.refAllDeclsRecursive(Parser);
+    std.testing.refAllDeclsRecursive(Glushkov);
 }

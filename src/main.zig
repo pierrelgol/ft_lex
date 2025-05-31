@@ -1,16 +1,28 @@
 const std = @import("std");
-const Parser = @import("regex.zig").Parser;
+const Parser = @import("Parser.zig");
+const Glushkov = @import("Glushkov.zig").Glushkov;
 
-pub fn foo() void {}
 pub fn main() !void {
-    var buffer: [8 * std.heap.pageSize()]u8 = undefined;
+    var buffer: [4 * std.heap.pageSize()]u8 = undefined;
     var fba_instance = std.heap.FixedBufferAllocator.init(buffer[0..]);
     const fba = fba_instance.allocator();
 
-    for (0..1_000_000) |_| {
-        defer fba_instance.reset();
-        var parser: Parser = .init(fba, "([0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?)|0[xX][0-9A-Fa-f]+|0[bB][01]+|0[0-7]+|[A-Za-z_][A-Za-z0-9_]*|\"([^\"\\]|\\.)*\"|'([^'\\]|\\.)*' ");
+    const pattern = "((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]).){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]) ";
+    const N = 1000;
+
+    var total_ns: i128 = 0;
+    for (0..N) |_| {
+        var parser: Parser = .init(fba, pattern);
         defer parser.deinit();
-        _ = try parser.parse();
+        var glushkov = Glushkov.init(fba);
+        defer glushkov.deinit();
+
+        const start = std.time.nanoTimestamp();
+        const ast = try parser.parse();
+        try glushkov.glushkovFromAst(ast.root.?);
+        const end = std.time.nanoTimestamp();
+        total_ns += end - start;
+        fba_instance.reset();
     }
+    std.debug.print("Avg parse time: {}\n", .{std.fmt.fmtDurationSigned(@truncate(@divFloor(total_ns, N)))});
 }
